@@ -3,7 +3,9 @@ module github.com/sloppyjoe/sloppy
 go 1.26.4
 
 require (
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/google/cel-go v0.28.1
+	github.com/redis/go-redis/v9 v9.20.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.52.0
 )
@@ -11,11 +13,14 @@ require (
 require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
 	golang.org/x/sys v0.42.0 // indirect
