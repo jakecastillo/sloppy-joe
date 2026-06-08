@@ -19,56 +19,62 @@ import (
 	"github.com/sloppyjoe/sloppy/ingest"
 	"github.com/sloppyjoe/sloppy/intent"
 	"github.com/sloppyjoe/sloppy/ledger"
+	"github.com/sloppyjoe/sloppy/metrics"
 	"github.com/sloppyjoe/sloppy/rules"
 	"github.com/sloppyjoe/sloppy/secrets"
 	"github.com/sloppyjoe/sloppy/state"
 )
 
 // buildEngine wires the loop from on-disk config. Returns a cleanup closer.
-func buildEngine(rulesPath, dbPath, pricebookPath string, out io.Writer) (*engine.Engine, *ledger.CostLedger, func(), error) {
+func buildEngine(rulesPath, dbPath, pricebookPath, keyPath string, failClosed bool, out io.Writer) (*engine.Engine, *ledger.CostLedger, *metrics.Registry, func(), error) {
 	rs, err := config.LoadRules(rulesPath)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	rec, err := rules.NewReconciler(rs)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	st, err := state.OpenSQLite(dbPath)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	signer, err := intent.NewEd25519Signer()
+	signer, err := intent.LoadOrCreateSigner(keyPath)
 	if err != nil {
 		st.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	var pb ledger.PriceBook
 	if pricebookPath != "" {
 		b, err := os.ReadFile(pricebookPath)
 		if err != nil {
 			st.Close()
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		if pb, err = ledger.LoadPriceBook(b); err != nil {
 			st.Close()
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
 	l := ledger.New(pb)
+	m := metrics.New()
 	reg := actuator.NewRegistry()
 	reg.Register(&actuator.Log{W: out})
 	if url := os.Getenv("SLOPPY_LITELLM_URL"); url != "" {
 		br := secrets.NewEnvBroker([]string{"litellm"})
 		reg.Register(actuator.NewLiteLLM(url, func() (string, error) { return br.Get("litellm") }))
 	}
-	e := engine.New(rec, reg, st, signer, engine.WithLedger(l))
-	return e, l, func() { st.Close() }, nil
+	fm := engine.FailOpen
+	if failClosed {
+		fm = engine.FailClosed
+	}
+	e := engine.New(rec, reg, st, signer, engine.WithLedger(l), engine.WithMetrics(m), engine.WithFailMode(fm))
+	return e, l, m, func() { st.Close() }, nil
 }
 
 // serve runs the ingest HTTP server + the TTL-revert ticker until ctx is cancelled.
-func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.CostLedger, revertEvery time.Duration, out io.Writer) error {
-	srv := &http.Server{Handler: ingest.NewServer(e, l).Handler()}
+func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.CostLedger, m *metrics.Registry, revertEvery time.Duration, out io.Writer) error {
+	srv := &http.Server{Handler: ingest.NewServer(e, l).SetMetrics(m).Handler()}
 
 	go func() {
 		ticker := time.NewTicker(revertEvery)
@@ -104,10 +110,12 @@ func main() {
 	rulesPath := flag.String("rules", "rules", "rules dir or file")
 	dbPath := flag.String("db", "sloppy.db", "sqlite db path")
 	pricebookPath := flag.String("pricebook", "", "price book yaml (optional)")
+	keyPath := flag.String("key", "sloppy.key", "ed25519 signing key file (created if absent)")
+	failClosed := flag.Bool("fail-closed", false, "refuse to act when state is unavailable")
 	revertEvery := flag.Duration("revert-interval", 30*time.Second, "TTL revert scan interval")
 	flag.Parse()
 
-	e, l, cleanup, err := buildEngine(*rulesPath, *dbPath, *pricebookPath, os.Stdout)
+	e, l, m, cleanup, err := buildEngine(*rulesPath, *dbPath, *pricebookPath, *keyPath, *failClosed, os.Stdout)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -121,7 +129,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := serve(ctx, ln, e, l, *revertEvery, os.Stdout); err != nil {
+	if err := serve(ctx, ln, e, l, m, *revertEvery, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "serve:", err)
 		os.Exit(1)
 	}

@@ -10,17 +10,25 @@ import (
 	"github.com/sloppyjoe/sloppy/core"
 	"github.com/sloppyjoe/sloppy/engine"
 	"github.com/sloppyjoe/sloppy/ledger"
+	"github.com/sloppyjoe/sloppy/metrics"
 )
 
 // Server adapts HTTP requests into engine + ledger calls.
 type Server struct {
-	engine *engine.Engine
-	ledger *ledger.CostLedger // optional; nil disables /v1/usage
+	engine  *engine.Engine
+	ledger  *ledger.CostLedger // optional; nil disables /v1/usage
+	metrics *metrics.Registry  // optional; powers /status
 }
 
 // NewServer builds the ingest server.
 func NewServer(e *engine.Engine, l *ledger.CostLedger) *Server {
 	return &Server{engine: e, ledger: l}
+}
+
+// SetMetrics attaches a metrics registry to expose at /status.
+func (s *Server) SetMetrics(m *metrics.Registry) *Server {
+	s.metrics = m
+	return s
 }
 
 // Handler returns the configured HTTP mux.
@@ -32,7 +40,17 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("/v1/signals", s.handleSignal)
 	mux.HandleFunc("/v1/usage", s.handleUsage)
+	mux.HandleFunc("/status", s.handleStatus)
 	return mux
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	snap := map[string]int64{}
+	if s.metrics != nil {
+		snap = s.metrics.Snapshot()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(snap)
 }
 
 type signalResp struct {

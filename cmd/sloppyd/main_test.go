@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestServeHealthAndSignal(t *testing.T) {
+func TestServeHealthSignalAndStatus(t *testing.T) {
 	dir := t.TempDir()
 	rulesDir := filepath.Join(dir, "rules")
 	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
@@ -25,7 +25,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e, l, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", io.Discard)
+	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), false, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, ln, e, l, time.Hour, io.Discard) }()
+	go func() { done <- serve(ctx, ln, e, l, m, time.Hour, io.Discard) }()
 
 	base := "http://" + ln.Addr().String()
 	var resp *http.Response
@@ -60,6 +60,16 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	out, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(out), `"applied":1`) {
 		t.Fatalf("expected applied:1, got %s", out)
+	}
+
+	// /status reflects self-metrics.
+	resp, err = http.Get(base + "/status")
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %v", err)
+	}
+	st, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(st), `"signals_handled":1`) || !strings.Contains(string(st), `"intents_applied":1`) {
+		t.Fatalf("status metrics unexpected: %s", st)
 	}
 
 	cancel()

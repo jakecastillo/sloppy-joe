@@ -11,22 +11,48 @@ A cost / eval / guardrail breach spawns a governed, capability-scoped, audited r
 ## What it feels like
 
 ```text
-$ sloppy up
-  🥪 sloppy joe — serving governed AI ops
-  watching OTel GenAI stream… cost ledger live · 1 rule armed
+# one-shot: run a signal through your rules (acts, then writes the audit)
+$ sloppy inject --rules examples/rules examples/signals/cost-spike.json
+  applied            route_override target=gpt-4o
+  applied            page target=gpt-4o
 
-$ sloppy rules apply ./rules
-  ✓ cost-guard.yaml   (loop armed)
+# CI gate: replay a fixture and see what WOULD fire (no side effects)
+$ sloppy test --replay examples/fixtures/replay.jsonl --rules examples/rules
+  replay: 4 signal(s), 6 intent(s) would fire
 
+# the tamper-evident audit log
 $ sloppy audit tail
-  reroute acme → ollama   ✓ signed receipt
+  chain: verified ✓ (3 entries)
+
+# run continuously: HTTP ingest + TTL auto-revert + /status metrics
+$ sloppyd --rules examples/rules
+  🥪 sloppyd listening on :8723
 ```
 
 > The command is **`sloppy`** (`sloppy up`, `sloppy audit tail`). We avoided `joe` because it collides with the classic `joe` editor (Joe's Own Editor) on many Unix systems — the brand stays **Sloppy Joe**.
 
 ## Status
 
-🚧 **Design approved — pre-implementation.** The v0 design is locked (see [`docs/superpowers/specs/2026-06-08-sloppy-joe-v0-design.md`](docs/superpowers/specs/2026-06-08-sloppy-joe-v0-design.md)); the implementation plan is next. A **Phase-0 demand-validation** with design partners runs in parallel (see [`docs/vision.md`](docs/vision.md)). No implementation code yet — by design.
+✅ **v0 implemented (Plans 1–4).** Library (`libsloppyjoe`) + `sloppy` CLI + `sloppyd` daemon. `go test ./...` green across all packages; static `CGO_ENABLED=0` binaries. Design + plans live under [`docs/superpowers/`](docs/superpowers/). A **Phase-0 demand-validation** with design partners runs in parallel (see [`docs/vision.md`](docs/vision.md)).
+
+## Quickstart
+
+```bash
+go build -o bin/sloppy  ./cmd/sloppy
+go build -o bin/sloppyd ./cmd/sloppyd
+
+# fire a recorded signal through the example rules, then read the audit
+./bin/sloppy inject --rules examples/rules --db /tmp/sloppy.db examples/signals/cost-spike.json
+./bin/sloppy audit tail --db /tmp/sloppy.db
+
+# or run the daemon and POST signals / usage over HTTP
+./bin/sloppyd --rules examples/rules --db /tmp/sloppy.db &
+curl -XPOST localhost:8723/v1/signals -d @examples/signals/cost-spike.json
+curl localhost:8723/status
+```
+
+**Commands:** `sloppy inject` · `sloppy test --replay` · `sloppy audit tail` · `sloppy doctor` · `sloppyd` (daemon).
+To wire a real LiteLLM admin API, set `SLOPPY_LITELLM_URL` and `SLOPPY_TOKEN_LITELLM`.
 
 ## Principles
 
