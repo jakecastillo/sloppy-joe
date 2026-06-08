@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sloppyjoe/sloppy/ee"
 )
 
 func TestServeHealthSignalAndStatus(t *testing.T) {
@@ -37,7 +39,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, ln, e, l, m, time.Hour, io.Discard) }()
+	go func() { done <- serve(ctx, ln, e, l, m, nil, time.Hour, io.Discard) }()
 
 	base := "http://" + ln.Addr().String()
 	var resp *http.Response
@@ -77,5 +79,68 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not shut down on cancel")
+	}
+}
+
+func TestServeWithAuth(t *testing.T) {
+	dir := t.TempDir()
+	rulesDir := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rulesDir, "c.yaml"), []byte(`
+on: cost.budget_burn
+when: signal.data.spend_1h_usd > 5.0
+then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), false, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	authz := ee.NewAuthorizer(map[string][]string{"secret": {"ingest:write"}})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, ln, e, l, m, authz, time.Hour, io.Discard) }()
+	base := "http://" + ln.Addr().String()
+
+	var resp *http.Response
+	for i := 0; i < 100; i++ {
+		resp, err = http.Get(base + "/healthz") // public even with auth on
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("healthz should be public: %v", err)
+	}
+
+	body := `{"type":"cost.budget_burn","correlation_key":"acme:cost","subject":{"alias":"gpt-4o"},"data":{"spend_1h_usd":9.0}}`
+	resp, err = http.Post(base+"/v1/signals", "application/json", strings.NewReader(body))
+	if err != nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unauthenticated signal should be 403, got %v %d", err, resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest("POST", base+"/v1/signals", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "secret")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("authenticated signal should be 200, got %v %d", err, resp.StatusCode)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not shut down")
 	}
 }
