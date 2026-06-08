@@ -1,0 +1,10 @@
+# When a tenant burns more than $5/hr, fail it over to a local model,
+# open a tracked issue, and page on-call — reviewed in Git, fully audited.
+on: cost.budget_burn
+when: signal.tenant == "acme" && signal.data.spend_1h_usd > 5.0
+for: 5m
+then:
+  - route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m }
+  - open_issue: { repo: acme/ops }
+  - page: { slack: "#oncall" }
+with: { dry_run: false, intent_budget: "3/h" }
