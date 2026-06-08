@@ -14,6 +14,10 @@ CREATE TABLE IF NOT EXISTS applied_intents (intent_id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS audit (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT, kind TEXT, detail TEXT, prev_hash TEXT, hash TEXT
+);
+CREATE TABLE IF NOT EXISTS pending_reverts (
+  intent_id TEXT PRIMARY KEY,
+  kind TEXT, target TEXT, args TEXT, due_at TEXT
 );`
 
 // OpenSQLite opens (and migrates) a SQLite-backed Store. Pure-Go driver (no cgo).
@@ -93,6 +97,39 @@ func (s *sqliteStore) VerifyAudit() bool {
 		prev = h
 	}
 	return true
+}
+
+func (s *sqliteStore) ScheduleRevert(r PendingRevert) error {
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO pending_reverts(intent_id,kind,target,args,due_at) VALUES(?,?,?,?,?)`,
+		r.IntentID, r.Kind, r.Target, r.ArgsJSON, r.DueAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *sqliteStore) DueReverts(now time.Time) ([]PendingRevert, error) {
+	rows, err := s.db.Query(`SELECT intent_id,kind,target,args,due_at FROM pending_reverts ORDER BY due_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingRevert
+	for rows.Next() {
+		var r PendingRevert
+		var due string
+		if err := rows.Scan(&r.IntentID, &r.Kind, &r.Target, &r.ArgsJSON, &due); err != nil {
+			return nil, err
+		}
+		r.DueAt, _ = time.Parse(time.RFC3339Nano, due)
+		if !r.DueAt.After(now) {
+			out = append(out, r)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (s *sqliteStore) MarkReverted(intentID string) error {
+	_, err := s.db.Exec(`DELETE FROM pending_reverts WHERE intent_id=?`, intentID)
+	return err
 }
 
 func (s *sqliteStore) Close() error { return s.db.Close() }

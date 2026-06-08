@@ -27,10 +27,17 @@ func NewReconciler(rs []Rule) (*Reconciler, error) {
 	return &Reconciler{rules: out}, nil
 }
 
-// Reconcile returns the intents that fire for this signal+state.
-// Pure decision function; the engine handles idempotency and governance.
-func (rc *Reconciler) Reconcile(sig core.Signal, state map[string]any) []core.RemediationIntent {
-	var intents []core.RemediationIntent
+// Match is a fired rule together with the intents it produced. The Rule is
+// carried so the engine can enforce `for:` windowing and governance.
+type Match struct {
+	Rule    Rule
+	Intents []core.RemediationIntent
+}
+
+// EvaluateMatches returns every matching rule (type + condition) with its intents.
+// Pure decision function; the engine handles `for:` windowing, idempotency, governance.
+func (rc *Reconciler) EvaluateMatches(sig core.Signal, state map[string]any) []Match {
+	var matches []Match
 	for _, cr := range rc.rules {
 		if cr.rule.On != sig.Type {
 			continue
@@ -39,9 +46,20 @@ func (rc *Reconciler) Reconcile(sig core.Signal, state map[string]any) []core.Re
 		if err != nil || !ok {
 			continue
 		}
+		ins := make([]core.RemediationIntent, 0, len(cr.rule.Then))
 		for _, a := range cr.rule.Then {
-			intents = append(intents, actionToIntent(a, cr.rule, sig))
+			ins = append(ins, actionToIntent(a, cr.rule, sig))
 		}
+		matches = append(matches, Match{Rule: cr.rule, Intents: ins})
+	}
+	return matches
+}
+
+// Reconcile returns the flattened intents that fire for this signal+state.
+func (rc *Reconciler) Reconcile(sig core.Signal, state map[string]any) []core.RemediationIntent {
+	var intents []core.RemediationIntent
+	for _, m := range rc.EvaluateMatches(sig, state) {
+		intents = append(intents, m.Intents...)
 	}
 	return intents
 }
