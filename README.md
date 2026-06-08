@@ -35,6 +35,98 @@ $ sloppyd --rules examples/rules
 
 ✅ **v0 implemented (Plans 1–4).** Library (`libsloppyjoe`) + `sloppy` CLI + `sloppyd` daemon. `go test ./...` green across all packages; static `CGO_ENABLED=0` binaries. Design + plans live under [`docs/superpowers/`](docs/superpowers/). A **Phase-0 demand-validation** with design partners runs in parallel (see [`docs/vision.md`](docs/vision.md)).
 
+## Architecture
+
+Sloppy Joe is a **control loop, not a gateway** — it sits beside the LLM gateway you already run, consumes its telemetry, and acts back on it through narrow, signed, reversible intents. It is never on the inference request hot path, and it never holds your provider keys.
+
+```mermaid
+flowchart LR
+  apps["Apps / agents"] -->|inference requests| gw
+
+  subgraph GW["LLM gateway — you already run it (not built by Sloppy Joe)"]
+    gw["LiteLLM · Bifrost · Envoy AI Gateway"]
+    keys[("provider keys live HERE")]
+  end
+  gw --> prov["OpenAI · Anthropic · Ollama / vLLM"]
+
+  subgraph SJ["Sloppy Joe — AI-ops control loop (off the hot path)"]
+    auth["ee/ API-key RBAC"]
+    subgraph ING["ingest (HTTP)"]
+      i1["POST /v1/signals"]
+      i2["POST /v1/usage"]
+      i3["POST /v1/otlp/metrics"]
+    end
+    eng["engine: reconcile → CEL → sign → govern → idempotent"]
+    rls[("rules/*.yaml + CEL")]
+    subgraph ST["state.Store"]
+      led[("cost ledger")]
+      aud[("hash-chained audit")]
+      rev[("pending TTL reverts")]
+    end
+    brk["secret broker (admin / notify tokens only)"]
+    subgraph ACT["actuators — signed, reversible intents"]
+      ac1["LiteLLM route_override"]
+      ac2["GitHub issue"]
+      ac3["Slack page"]
+      ac4["Bifrost · Envoy"]
+    end
+  end
+
+  gw -. OTel telemetry .-> ING
+  auth --> ING
+  ING --> eng
+  rls --> eng
+  eng <--> ST
+  brk --> ACT
+  eng --> ACT
+  ac1 -. admin API .-> gw
+  ac4 -. admin API .-> gw
+  ac2 --> ext1["GitHub"]
+  ac3 --> ext2["Slack"]
+
+  subgraph BK["state backends"]
+    db1[("SQLite — solo")]
+    db2[("Redis — multi-replica")]
+  end
+  ST --- db1
+  ST --- db2
+
+  subgraph BIN["binaries"]
+    c1["sloppy CLI — inject · test --replay · audit · doctor"]
+    c2["sloppyd — ingest + TTL revert + /status"]
+  end
+  c1 --> eng
+  c2 --> ING
+
+  classDef planned stroke-dasharray:6 4,opacity:0.7;
+  class auth,ac4 planned;
+```
+
+> Dashed = in progress / planned (`ee/` auth and Bifrost/Envoy actuators). Everything else is implemented and tested.
+
+The runtime loop — **observe → decide → act → record → revert** — all off the request hot path:
+
+```mermaid
+sequenceDiagram
+  participant GW as Gateway (OTel)
+  participant IN as Sloppy Joe ingest
+  participant EN as engine
+  participant ST as state (ledger/audit/reverts)
+  participant AC as actuator
+  GW-->>IN: telemetry / signal (cost burn, latency, fallback…)
+  IN->>EN: Signal
+  EN->>ST: read cost / policy state
+  EN->>EN: CEL match? `for:` window held?
+  EN->>EN: build + ed25519-sign RemediationIntent
+  EN->>ST: idempotency check (skip if already applied)
+  EN->>AC: Apply (reroute / open issue / page)
+  AC-->>GW: admin API (reroute)
+  EN->>ST: mark applied + append hash-chained audit
+  Note over EN,ST: TTL elapses (sloppyd ticker)
+  EN->>AC: Revert
+  EN->>ST: mark reverted + audit
+```
+
 ## Quickstart
 
 ```bash
