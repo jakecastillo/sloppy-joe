@@ -1,0 +1,33 @@
+# Compiled binaries
+/joe
+/sloppy
+/sloppyjoe
+/sloppy-joed
+*.exe
+*.out
+bin/
+dist/
+
+# Go
+*.test
+*.prof
+*.cover
+coverage.*
+vendor/
+go.work
+go.work.sum
+
+# Local state / secrets (never commit)
+.env
+*.local
+*.pem
+*.key
+*.sqlite
+*.db
+/data/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
