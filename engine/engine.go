@@ -1,5 +1,6 @@
 // Package engine wires reconcile → sign → govern → actuate → audit, with
-// `for:` windowing, ledger-driven state, and durable TTL auto-revert.
+// `for:` windowing, ledger-driven state, durable TTL auto-revert, a
+// fail-open/closed knob, and self-metrics.
 package engine
 
 import (
@@ -13,6 +14,7 @@ import (
 	"github.com/sloppyjoe/sloppy/core"
 	"github.com/sloppyjoe/sloppy/intent"
 	"github.com/sloppyjoe/sloppy/ledger"
+	"github.com/sloppyjoe/sloppy/metrics"
 	"github.com/sloppyjoe/sloppy/rules"
 	"github.com/sloppyjoe/sloppy/state"
 )
@@ -28,6 +30,16 @@ const (
 	OutPending Outcome = "pending_for_window"
 )
 
+// FailMode decides behaviour when the state store is unreachable.
+type FailMode int
+
+const (
+	// FailOpen proceeds with remediation when state can't be read (availability over strictness).
+	FailOpen FailMode = iota
+	// FailClosed refuses to act when state can't be read (strictness over availability).
+	FailClosed
+)
+
 // Result reports what happened to one intent (or a pending rule) in a Handle pass.
 type Result struct {
 	Intent  core.RemediationIntent
@@ -38,12 +50,14 @@ type Result struct {
 
 // Engine is the off-hot-path control loop core.
 type Engine struct {
-	rec    *rules.Reconciler
-	reg    *actuator.Registry
-	store  state.Store
-	signer intent.Signer
-	led    *ledger.CostLedger
-	now    func() time.Time
+	rec      *rules.Reconciler
+	reg      *actuator.Registry
+	store    state.Store
+	signer   intent.Signer
+	led      *ledger.CostLedger
+	now      func() time.Time
+	failMode FailMode
+	met      *metrics.Registry
 
 	mu      sync.Mutex
 	pending map[string]time.Time // ruleSHA|correlationKey -> first-seen, for `for:` gating
@@ -58,12 +72,19 @@ func WithLedger(l *ledger.CostLedger) Option { return func(e *Engine) { e.led = 
 // WithClock overrides the clock (for tests / determinism).
 func WithClock(fn func() time.Time) Option { return func(e *Engine) { e.now = fn } }
 
+// WithFailMode sets store-unreachable behaviour (default FailOpen).
+func WithFailMode(m FailMode) Option { return func(e *Engine) { e.failMode = m } }
+
+// WithMetrics attaches a self-metrics registry.
+func WithMetrics(m *metrics.Registry) Option { return func(e *Engine) { e.met = m } }
+
 // New builds an engine. Extra behaviour is opt-in via Options (back-compatible).
 func New(rec *rules.Reconciler, reg *actuator.Registry, store state.Store, signer intent.Signer, opts ...Option) *Engine {
 	e := &Engine{
 		rec: rec, reg: reg, store: store, signer: signer,
-		now:     func() time.Time { return time.Now().UTC() },
-		pending: map[string]time.Time{},
+		now:      func() time.Time { return time.Now().UTC() },
+		failMode: FailOpen,
+		pending:  map[string]time.Time{},
 	}
 	for _, o := range opts {
 		o(e)
@@ -73,6 +94,7 @@ func New(rec *rules.Reconciler, reg *actuator.Registry, store state.Store, signe
 
 // Handle runs one signal through the loop and returns per-intent results.
 func (e *Engine) Handle(ctx context.Context, sig core.Signal) ([]Result, error) {
+	e.met.Inc("signals_handled")
 	now := e.now()
 	var st map[string]any
 	if e.led != nil {
@@ -92,7 +114,6 @@ func (e *Engine) Handle(ctx context.Context, sig core.Signal) ([]Result, error) 
 	return results, nil
 }
 
-// forWindowSatisfied is true once a rule's condition has held for >= dur.
 func (e *Engine) forWindowSatisfied(ruleSHA, corr string, dur time.Duration, now time.Time) bool {
 	key := ruleSHA + "|" + corr
 	e.mu.Lock()
@@ -113,14 +134,26 @@ func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now
 	in.Signature = e.signer.Sign(in.CanonicalBytes())
 	if in.DryRun {
 		_, _ = e.store.AppendAudit("intent.dry_run", auditDetail(in))
+		e.met.Inc("intents_dry_run")
 		return Result{Intent: in, Outcome: OutDryRun}
 	}
-	if done, _ := e.store.IsIntentApplied(in.ID); done {
+	done, err := e.store.IsIntentApplied(in.ID)
+	if err != nil {
+		if e.failMode == FailClosed {
+			_, _ = e.store.AppendAudit("intent.fail_closed", auditDetail(in))
+			e.met.Inc("intents_failed")
+			return Result{Intent: in, Outcome: OutFailed, Err: "state unavailable (fail-closed)"}
+		}
+		done = false // fail-open: proceed as if not applied
+	}
+	if done {
+		e.met.Inc("intents_skipped")
 		return Result{Intent: in, Outcome: OutSkipped}
 	}
 	rcpt, err := e.reg.Apply(ctx, in)
 	if err != nil {
 		_, _ = e.store.AppendAudit("intent.failed", fmt.Sprintf("%s err=%v", auditDetail(in), err))
+		e.met.Inc("intents_failed")
 		return Result{Intent: in, Outcome: OutFailed, Err: err.Error()}
 	}
 	rcpt.Signature = e.signer.Sign([]byte(rcpt.IntentID + string(rcpt.Outcome) + rcpt.Actuator))
@@ -133,6 +166,7 @@ func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now
 			ArgsJSON: string(args), DueAt: now.Add(in.TTL),
 		})
 	}
+	e.met.Inc("intents_applied")
 	return Result{Intent: in, Outcome: OutApplied, Receipt: rcpt}
 }
 
@@ -155,6 +189,7 @@ func (e *Engine) ProcessDueReverts(ctx context.Context, now time.Time) (int, err
 		}
 		_ = e.store.MarkReverted(pr.IntentID)
 		_, _ = e.store.AppendAudit("intent.reverted", fmt.Sprintf("%s target=%s", pr.Kind, pr.Target))
+		e.met.Inc("intents_reverted")
 		n++
 	}
 	return n, nil
