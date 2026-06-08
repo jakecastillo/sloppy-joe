@@ -23,11 +23,10 @@ import (
 	"github.com/sloppyjoe/sloppy/metrics"
 	"github.com/sloppyjoe/sloppy/rules"
 	"github.com/sloppyjoe/sloppy/secrets"
-	"github.com/sloppyjoe/sloppy/state"
 )
 
 // buildEngine wires the loop from on-disk config. Returns a cleanup closer.
-func buildEngine(rulesPath, dbPath, pricebookPath, keyPath string, failClosed bool, out io.Writer) (*engine.Engine, *ledger.CostLedger, *metrics.Registry, func(), error) {
+func buildEngine(rulesPath, dbPath, pricebookPath, keyPath, storeKind, redisAddr string, failClosed bool, out io.Writer) (*engine.Engine, *ledger.CostLedger, *metrics.Registry, func(), error) {
 	rs, err := config.LoadRules(rulesPath)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -36,7 +35,7 @@ func buildEngine(rulesPath, dbPath, pricebookPath, keyPath string, failClosed bo
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	st, err := state.OpenSQLite(dbPath)
+	st, err := config.OpenStore(storeKind, dbPath, redisAddr)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -118,6 +117,8 @@ func main() {
 	keyPath := flag.String("key", "sloppy.key", "ed25519 signing key file (created if absent)")
 	failClosed := flag.Bool("fail-closed", false, "refuse to act when state is unavailable")
 	authOn := flag.Bool("auth", false, "require API-key RBAC on the HTTP API (keys via SLOPPY_API_KEYS)")
+	store := flag.String("store", "sqlite", "state backend: sqlite|redis")
+	redisAddr := flag.String("redis-addr", "", "redis address host:port (when --store=redis)")
 	revertEvery := flag.Duration("revert-interval", 30*time.Second, "TTL revert scan interval")
 	flag.Parse()
 
@@ -126,7 +127,7 @@ func main() {
 		authz = ee.LoadFromEnv()
 	}
 
-	e, l, m, cleanup, err := buildEngine(*rulesPath, *dbPath, *pricebookPath, *keyPath, *failClosed, os.Stdout)
+	e, l, m, cleanup, err := buildEngine(*rulesPath, *dbPath, *pricebookPath, *keyPath, *store, *redisAddr, *failClosed, os.Stdout)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

@@ -10,7 +10,23 @@ import (
 
 	"github.com/sloppyjoe/sloppy/core"
 	"github.com/sloppyjoe/sloppy/rules"
+	"github.com/sloppyjoe/sloppy/state"
 )
+
+// OpenStore opens the configured state backend ("sqlite" default, or "redis").
+func OpenStore(kind, sqlitePath, redisAddr string) (state.Store, error) {
+	switch kind {
+	case "", "sqlite":
+		return state.OpenSQLite(sqlitePath)
+	case "redis":
+		if redisAddr == "" {
+			return nil, fmt.Errorf("config: redis store requires a redis address")
+		}
+		return state.OpenRedis(redisAddr)
+	default:
+		return nil, fmt.Errorf("config: unknown store %q (want sqlite|redis)", kind)
+	}
+}
 
 // LoadRules reads a rules file or every *.yaml/*.yml in a directory (one rule per file).
 func LoadRules(path string) ([]rules.Rule, error) {

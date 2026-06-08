@@ -32,25 +32,39 @@ func (a *httpRouteActuator) Capabilities() []core.ActionKind {
 	return []core.ActionKind{core.ActionRouteOverride}
 }
 
-func (a *httpRouteActuator) post(ctx context.Context, body map[string]any) error {
-	tok, err := a.token()
+// postJSON marshals body, POSTs it with the given headers, and checks status < 300.
+// Shared by every HTTP actuator so the marshal/request/close/status dance lives once.
+func postJSON(ctx context.Context, c *http.Client, url string, hdr map[string]string, body any) error {
+	buf, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	buf, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+a.path, bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.client.Do(req)
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("%s: admin returned %d", a.name, resp.StatusCode)
+		return fmt.Errorf("http %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (a *httpRouteActuator) post(ctx context.Context, body map[string]any) error {
+	tok, err := a.token()
+	if err != nil {
+		return err
+	}
+	hdr := map[string]string{"Authorization": "Bearer " + tok, "Content-Type": "application/json"}
+	if err := postJSON(ctx, a.client, a.baseURL+a.path, hdr, body); err != nil {
+		return fmt.Errorf("%s: %w", a.name, err)
 	}
 	return nil
 }

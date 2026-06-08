@@ -27,7 +27,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), false, io.Discard)
+	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), "sqlite", "", false, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), false, io.Discard)
+	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), "sqlite", "", false, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
