@@ -74,7 +74,7 @@ func buildEngine(rulesPath, dbPath, pricebookPath, keyPath, storeKind, redisAddr
 
 // serve runs the ingest HTTP server + the TTL-revert ticker until ctx is cancelled.
 func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.CostLedger, m *metrics.Registry, authz *ee.Authorizer, revertEvery time.Duration, out io.Writer) error {
-	var h http.Handler = ingest.NewServer(e, l).SetMetrics(m).Handler()
+	h := ingest.NewServer(e, l).SetMetrics(m).Handler()
 	if authz != nil {
 		h = authz.Middleware(h)
 	}
