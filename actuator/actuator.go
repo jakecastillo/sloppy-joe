@@ -51,18 +51,27 @@ func (r *Registry) Revert(ctx context.Context, i core.RemediationIntent) (core.R
 	return a.Revert(ctx, i)
 }
 
-// Fake is a test actuator covering all kinds; counts calls.
-type Fake struct{ Applied, Reverted int }
+// Fake is a test actuator covering all kinds; counts calls and can inject errors.
+type Fake struct {
+	Applied, Reverted   int
+	ApplyErr, RevertErr error
+}
 
 func (f *Fake) Capabilities() []core.ActionKind {
 	return []core.ActionKind{core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage}
 }
 func (f *Fake) Apply(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	f.Applied++
+	if f.ApplyErr != nil {
+		return core.Receipt{IntentID: i.ID, Actuator: "fake", Outcome: core.OutcomeFailed}, f.ApplyErr
+	}
 	return core.Receipt{IntentID: i.ID, Actuator: "fake", Outcome: core.OutcomeApplied}, nil
 }
 func (f *Fake) Revert(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	f.Reverted++
+	if f.RevertErr != nil {
+		return core.Receipt{IntentID: i.ID, Actuator: "fake", Outcome: core.OutcomeFailed}, f.RevertErr
+	}
 	return core.Receipt{IntentID: i.ID, Actuator: "fake", Outcome: core.OutcomeReverted}, nil
 }
 

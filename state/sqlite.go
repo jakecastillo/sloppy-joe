@@ -21,11 +21,18 @@ CREATE TABLE IF NOT EXISTS pending_reverts (
 );`
 
 // OpenSQLite opens (and migrates) a SQLite-backed Store. Pure-Go driver (no cgo).
+//
+// SQLite allows a single writer; the daemon serves requests concurrently, so we
+// serialize writers (SetMaxOpenConns(1)) and set busy_timeout + WAL. Without
+// this, concurrent writes return SQLITE_BUSY and silently drop idempotency,
+// revert, and audit records.
 func OpenSQLite(path string) (Store, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
@@ -46,13 +53,24 @@ func (s *sqliteStore) MarkIntentApplied(id string) error {
 	return err
 }
 
+// AppendAudit is transactional: the read-prev-hash + insert is one atomic unit,
+// so concurrent appends can't fork the chain (combined with SetMaxOpenConns(1)).
 func (s *sqliteStore) AppendAudit(kind, detail string) (AuditEntry, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return AuditEntry{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck // rolled back unless committed
+
 	var prev string
-	_ = s.db.QueryRow(`SELECT hash FROM audit ORDER BY seq DESC LIMIT 1`).Scan(&prev)
+	_ = tx.QueryRow(`SELECT hash FROM audit ORDER BY seq DESC LIMIT 1`).Scan(&prev)
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	h := ChainHash(ts, kind, detail, prev)
-	res, err := s.db.Exec(`INSERT INTO audit(ts,kind,detail,prev_hash,hash) VALUES(?,?,?,?,?)`, ts, kind, detail, prev, h)
+	res, err := tx.Exec(`INSERT INTO audit(ts,kind,detail,prev_hash,hash) VALUES(?,?,?,?,?)`, ts, kind, detail, prev, h)
 	if err != nil {
+		return AuditEntry{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return AuditEntry{}, err
 	}
 	id, _ := res.LastInsertId()
@@ -80,23 +98,11 @@ func (s *sqliteStore) Audit() ([]AuditEntry, error) {
 }
 
 func (s *sqliteStore) VerifyAudit() bool {
-	rows, err := s.db.Query(`SELECT ts,kind,detail,prev_hash,hash FROM audit ORDER BY seq ASC`)
+	es, err := s.Audit()
 	if err != nil {
 		return false
 	}
-	defer rows.Close()
-	prev := ""
-	for rows.Next() {
-		var ts, kind, detail, ph, h string
-		if err := rows.Scan(&ts, &kind, &detail, &ph, &h); err != nil {
-			return false
-		}
-		if ph != prev || h != ChainHash(ts, kind, detail, prev) {
-			return false
-		}
-		prev = h
-	}
-	return true
+	return VerifyChain(es)
 }
 
 func (s *sqliteStore) ScheduleRevert(r PendingRevert) error {

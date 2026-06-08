@@ -1,0 +1,131 @@
+package engine
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/sloppyjoe/sloppy/actuator"
+	"github.com/sloppyjoe/sloppy/core"
+	"github.com/sloppyjoe/sloppy/intent"
+	"github.com/sloppyjoe/sloppy/rules"
+	"github.com/sloppyjoe/sloppy/state"
+)
+
+const ttlRule = `
+on: cost.budget_burn
+when: signal.data.spend_1h_usd > 5.0
+then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]
+`
+
+func burnSig() core.Signal {
+	return core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+}
+
+func auditHas(t *testing.T, st state.Store, kind string) bool {
+	t.Helper()
+	es, _ := st.Audit()
+	for _, e := range es {
+		if e.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// A failed Revert must NOT mark the intent reverted — it must stay pending and retry.
+func TestRevertFailureKeepsPendingAndRetries(t *testing.T) {
+	base := time.Unix(1749340800, 0).UTC()
+	now := base
+	rs, _ := rules.ParseRules([]byte(ttlRule))
+	rec, _ := rules.NewReconciler(rs)
+	st, _ := state.OpenSQLite(t.TempDir() + "/h.db")
+	defer st.Close()
+	reg := actuator.NewRegistry()
+	f := &actuator.Fake{RevertErr: errBoom}
+	reg.Register(f)
+	signer, _ := intent.NewEd25519Signer()
+	e := New(rec, reg, st, signer, WithClock(func() time.Time { return now }))
+
+	if res, _ := e.Handle(context.Background(), burnSig()); countApplied(res) != 1 {
+		t.Fatal("expected apply")
+	}
+	// Revert fails → not counted, audited, still pending.
+	if n, _ := e.ProcessDueReverts(context.Background(), base.Add(31*time.Minute)); n != 0 {
+		t.Fatalf("failed revert must not count, got %d", n)
+	}
+	if f.Reverted != 1 {
+		t.Fatalf("revert should have been attempted once, got %d", f.Reverted)
+	}
+	if !auditHas(t, st, "intent.revert_failed") {
+		t.Fatal("expected intent.revert_failed audit entry")
+	}
+	// Now it succeeds → still due, gets reverted exactly once.
+	f.RevertErr = nil
+	if n, _ := e.ProcessDueReverts(context.Background(), base.Add(32*time.Minute)); n != 1 {
+		t.Fatalf("retry should revert once, got %d", n)
+	}
+}
+
+// A store whose MarkReverted fails must not silently loop or count as reverted.
+type markFailStore struct {
+	state.Store
+}
+
+func (m markFailStore) MarkReverted(string) error { return errBoom }
+
+func TestMarkRevertedFailureSurfaced(t *testing.T) {
+	base := time.Unix(1749340800, 0).UTC()
+	now := base
+	rs, _ := rules.ParseRules([]byte(ttlRule))
+	rec, _ := rules.NewReconciler(rs)
+	inner, _ := state.OpenSQLite(t.TempDir() + "/m.db")
+	defer inner.Close()
+	st := markFailStore{Store: inner}
+	reg := actuator.NewRegistry()
+	reg.Register(&actuator.Fake{})
+	signer, _ := intent.NewEd25519Signer()
+	e := New(rec, reg, st, signer, WithClock(func() time.Time { return now }))
+
+	if res, _ := e.Handle(context.Background(), burnSig()); countApplied(res) != 1 {
+		t.Fatal("expected apply")
+	}
+	n, _ := e.ProcessDueReverts(context.Background(), base.Add(31*time.Minute))
+	if n != 0 {
+		t.Fatalf("MarkReverted failure must not count as reverted, got %d", n)
+	}
+	if !auditHas(t, inner, "intent.revert_mark_failed") {
+		t.Fatal("expected intent.revert_mark_failed audit entry")
+	}
+}
+
+// A one-shot spike that never satisfies `for:` must not leak the pending map.
+func TestPendingWindowDoesNotLeak(t *testing.T) {
+	base := time.Unix(1749340800, 0).UTC()
+	now := base
+	e, _, st := mustEngine(t, `
+on: cost.budget_burn
+when: signal.data.spend_1h_usd > 5.0
+for: 1m
+then: [ { page: { slack: "#x" } } ]
+`, WithClock(func() time.Time { return now }))
+	defer st.Close()
+
+	if _, err := e.Handle(context.Background(), burnSig()); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.pending) != 1 {
+		t.Fatalf("expected 1 pending window, got %d", len(e.pending))
+	}
+	// Long after the window, a different incident triggers the sweep.
+	now = base.Add(10 * time.Minute)
+	other := burnSig()
+	other.CorrelationKey = "other:cost"
+	if _, err := e.Handle(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.pending) != 1 {
+		t.Fatalf("stale pending window should have been swept; got %d entries", len(e.pending))
+	}
+}
