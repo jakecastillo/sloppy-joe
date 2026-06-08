@@ -1,0 +1,4 @@
+{"id":"s1-cost","type":"cost.budget_burn","subject":{"tenant":"acme","alias":"gpt-4o"},"data":{"spend_1h_usd":9.0}}
+{"id":"s2-latency","type":"latency.regression","subject":{"alias":"gpt-4o"},"data":{"p95_latency_ms":3000}}
+{"id":"s3-fallback","type":"fallback.fired","severity":"critical","subject":{"alias":"gpt-4o"}}
+{"id":"s4-quiet","type":"cost.budget_burn","subject":{"tenant":"acme"},"data":{"spend_1h_usd":1.0}}

@@ -11,8 +11,10 @@ import (
 	sloppyjoe "github.com/sloppyjoe/sloppy"
 	"github.com/sloppyjoe/sloppy/actuator"
 	"github.com/sloppyjoe/sloppy/config"
+	"github.com/sloppyjoe/sloppy/doctor"
 	"github.com/sloppyjoe/sloppy/engine"
 	"github.com/sloppyjoe/sloppy/intent"
+	"github.com/sloppyjoe/sloppy/replay"
 	"github.com/sloppyjoe/sloppy/rules"
 	"github.com/sloppyjoe/sloppy/secrets"
 	"github.com/sloppyjoe/sloppy/state"
@@ -20,7 +22,7 @@ import (
 
 func run(args []string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: sloppy <version|inject|audit>")
+		fmt.Fprintln(out, "usage: sloppy <version|inject|audit|test|doctor>")
 		return 2
 	}
 	switch args[0] {
@@ -31,6 +33,10 @@ func run(args []string, out io.Writer) int {
 		return cmdInject(args[1:], out)
 	case "audit":
 		return cmdAudit(args[1:], out)
+	case "test":
+		return cmdTest(args[1:], out)
+	case "doctor":
+		return cmdDoctor(args[1:], out)
 	default:
 		fmt.Fprintf(out, "unknown command: %s\n", args[0])
 		return 2
@@ -131,6 +137,79 @@ func buildRegistry(out io.Writer) *actuator.Registry {
 		reg.Register(actuator.NewLiteLLM(url, func() (string, error) { return br.Get("litellm") }))
 	}
 	return reg
+}
+
+// cmdTest deterministically replays a JSONL fixture of signals against the rules
+// and prints what WOULD fire — no actuation, no state writes. A CI gate.
+func cmdTest(args []string, out io.Writer) int {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(out)
+	rulesPath := fs.String("rules", "rules", "rules dir or file")
+	fixture := fs.String("replay", "", "JSONL fixture of signals to replay")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *fixture == "" {
+		fmt.Fprintln(out, "usage: sloppy test --replay <fixture.jsonl> [--rules dir]")
+		return 2
+	}
+	rs, err := config.LoadRules(*rulesPath)
+	if err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	rec, err := rules.NewReconciler(rs)
+	if err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	sigs, err := config.LoadSignalsJSONL(*fixture)
+	if err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	fired := 0
+	for _, r := range replay.Run(rec, sigs) {
+		if !r.Matched {
+			fmt.Fprintf(out, "%-14s (no rule)\n", r.SignalID)
+			continue
+		}
+		for _, f := range r.Intents {
+			fmt.Fprintf(out, "%-14s would %s target=%s (rule %s)\n", r.SignalID, f.Kind, f.Target, f.Rule)
+			fired++
+		}
+	}
+	fmt.Fprintf(out, "replay: %d signal(s), %d intent(s) would fire\n", len(sigs), fired)
+	return 0
+}
+
+// cmdDoctor runs connectivity/capability checks.
+func cmdDoctor(args []string, out io.Writer) int {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(out)
+	rulesPath := fs.String("rules", "rules", "rules dir or file")
+	dbPath := fs.String("db", "sloppy.db", "sqlite db path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	checks := []doctor.Check{
+		doctor.CheckRules(*rulesPath),
+		doctor.CheckDB(*dbPath),
+		doctor.CheckLiteLLM(os.Getenv("SLOPPY_LITELLM_URL")),
+	}
+	allOK := true
+	for _, c := range checks {
+		mark := "✓"
+		if !c.OK {
+			mark = "✗"
+			allOK = false
+		}
+		fmt.Fprintf(out, "[%s] %-10s %s\n", mark, c.Name, c.Detail)
+	}
+	if !allOK {
+		return 1
+	}
+	return 0
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout)) }

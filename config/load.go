@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/sloppyjoe/sloppy/core"
 	"github.com/sloppyjoe/sloppy/rules"
@@ -60,4 +61,28 @@ func LoadSignal(path string) (core.Signal, error) {
 		return core.Signal{}, err
 	}
 	return s, nil
+}
+
+// LoadSignalsJSONL reads a JSONL file (one core.Signal per non-empty line).
+func LoadSignalsJSONL(path string) ([]core.Signal, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var sigs []core.Signal
+	for i, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var s core.Signal
+		if err := json.Unmarshal([]byte(line), &s); err != nil {
+			return nil, fmt.Errorf("%s line %d: %w", path, i+1, err)
+		}
+		sigs = append(sigs, s)
+	}
+	if len(sigs) == 0 {
+		return nil, fmt.Errorf("no signals in %s", path)
+	}
+	return sigs, nil
 }
