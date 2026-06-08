@@ -1,0 +1,6 @@
+# When a critical provider-fallback storm fires, page on-call.
+on: fallback.fired
+when: signal.severity == "critical"
+then:
+  - page: { slack: "#oncall" }
+with: { dry_run: false }

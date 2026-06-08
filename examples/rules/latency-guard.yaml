@@ -1,0 +1,7 @@
+# When p95 latency regresses past 2s, page on-call and open a tracked issue.
+on: latency.regression
+when: signal.data.p95_latency_ms > 2000
+then:
+  - page: { slack: "#oncall" }
+  - open_issue: { repo: acme/ops }
+with: { dry_run: false }
