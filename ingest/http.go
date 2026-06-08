@@ -40,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("/v1/signals", s.handleSignal)
 	mux.HandleFunc("/v1/usage", s.handleUsage)
+	mux.HandleFunc("/v1/otlp/metrics", s.handleOTLP)
 	mux.HandleFunc("/status", s.handleStatus)
 	return mux
 }
