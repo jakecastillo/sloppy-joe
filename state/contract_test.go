@@ -1,6 +1,8 @@
 package state
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +62,20 @@ func storeContract(t *testing.T, s Store) {
 	}
 	if d, _ := s.DueReverts(base.Add(time.Hour)); len(d) != 0 {
 		t.Fatalf("reverted entry should be gone, got %d", len(d))
+	}
+
+	// Concurrency: parallel appends must keep the tamper-evident chain intact.
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			_, _ = s.AppendAudit("concurrent", fmt.Sprintf("e%d", n))
+		}(i)
+	}
+	wg.Wait()
+	if !s.VerifyAudit() {
+		t.Fatal("audit chain corrupt after concurrent appends")
 	}
 }
 

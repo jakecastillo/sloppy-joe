@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -15,26 +16,24 @@ const (
 )
 
 type redisStore struct {
-	c   *redis.Client
-	ctx context.Context
+	c *redis.Client
 }
 
 // OpenRedis returns a Redis-backed Store (multi-replica capable). Same contract as SQLite.
 func OpenRedis(addr string) (Store, error) {
 	c := redis.NewClient(&redis.Options{Addr: addr})
-	ctx := context.Background()
-	if err := c.Ping(ctx).Err(); err != nil {
+	if err := c.Ping(context.Background()).Err(); err != nil {
 		return nil, err
 	}
-	return &redisStore{c: c, ctx: ctx}, nil
+	return &redisStore{c: c}, nil
 }
 
 func (s *redisStore) IsIntentApplied(id string) (bool, error) {
-	return s.c.SIsMember(s.ctx, keyApplied, id).Result()
+	return s.c.SIsMember(context.Background(), keyApplied, id).Result()
 }
 
 func (s *redisStore) MarkIntentApplied(id string) error {
-	return s.c.SAdd(s.ctx, keyApplied, id).Err()
+	return s.c.SAdd(context.Background(), keyApplied, id).Err()
 }
 
 type auditRec struct {
@@ -45,27 +44,50 @@ type auditRec struct {
 	Hash     string `json:"hash"`
 }
 
+// AppendAudit links a new entry atomically. The read-prev + push is wrapped in
+// WATCH/MULTI/EXEC with retry-on-conflict so concurrent appends (across replicas)
+// cannot fork the tamper-evident chain.
 func (s *redisStore) AppendAudit(kind, detail string) (AuditEntry, error) {
-	prev := ""
-	if last, err := s.c.LIndex(s.ctx, keyAudit, -1).Result(); err == nil && last != "" {
-		var lr auditRec
-		if json.Unmarshal([]byte(last), &lr) == nil {
-			prev = lr.Hash
+	ctx := context.Background()
+	const maxRetries = 16
+	var entry AuditEntry
+	txf := func(tx *redis.Tx) error {
+		prev := ""
+		if last, err := tx.LIndex(ctx, keyAudit, -1).Result(); err == nil && last != "" {
+			var lr auditRec
+			if json.Unmarshal([]byte(last), &lr) == nil {
+				prev = lr.Hash
+			}
 		}
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+		h := ChainHash(ts, kind, detail, prev)
+		b, _ := json.Marshal(auditRec{TS: ts, Kind: kind, Detail: detail, PrevHash: prev, Hash: h})
+		var rp *redis.IntCmd
+		if _, err := tx.TxPipelined(ctx, func(p redis.Pipeliner) error {
+			rp = p.RPush(ctx, keyAudit, b)
+			return nil
+		}); err != nil {
+			return err
+		}
+		t, _ := time.Parse(time.RFC3339Nano, ts)
+		entry = AuditEntry{Seq: int(rp.Val()), TS: t, Kind: kind, Detail: detail, PrevHash: prev, Hash: h}
+		return nil
 	}
-	ts := time.Now().UTC().Format(time.RFC3339Nano)
-	h := ChainHash(ts, kind, detail, prev)
-	b, _ := json.Marshal(auditRec{TS: ts, Kind: kind, Detail: detail, PrevHash: prev, Hash: h})
-	n, err := s.c.RPush(s.ctx, keyAudit, b).Result()
-	if err != nil {
+	for i := 0; i < maxRetries; i++ {
+		err := s.c.Watch(ctx, txf, keyAudit)
+		if err == nil {
+			return entry, nil
+		}
+		if err == redis.TxFailedErr {
+			continue // optimistic-lock conflict — retry
+		}
 		return AuditEntry{}, err
 	}
-	t, _ := time.Parse(time.RFC3339Nano, ts)
-	return AuditEntry{Seq: int(n), TS: t, Kind: kind, Detail: detail, PrevHash: prev, Hash: h}, nil
+	return AuditEntry{}, fmt.Errorf("redis: audit append contention after %d retries", maxRetries)
 }
 
 func (s *redisStore) Audit() ([]AuditEntry, error) {
-	vals, err := s.c.LRange(s.ctx, keyAudit, 0, -1).Result()
+	vals, err := s.c.LRange(context.Background(), keyAudit, 0, -1).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -82,22 +104,11 @@ func (s *redisStore) Audit() ([]AuditEntry, error) {
 }
 
 func (s *redisStore) VerifyAudit() bool {
-	vals, err := s.c.LRange(s.ctx, keyAudit, 0, -1).Result()
+	es, err := s.Audit()
 	if err != nil {
 		return false
 	}
-	prev := ""
-	for _, v := range vals {
-		var r auditRec
-		if json.Unmarshal([]byte(v), &r) != nil {
-			return false
-		}
-		if r.PrevHash != prev || r.Hash != ChainHash(r.TS, r.Kind, r.Detail, prev) {
-			return false
-		}
-		prev = r.Hash
-	}
-	return true
+	return VerifyChain(es)
 }
 
 type revertRec struct {
@@ -109,11 +120,11 @@ type revertRec struct {
 
 func (s *redisStore) ScheduleRevert(r PendingRevert) error {
 	b, _ := json.Marshal(revertRec{Kind: r.Kind, Target: r.Target, Args: r.ArgsJSON, DueAt: r.DueAt.UTC().Format(time.RFC3339Nano)})
-	return s.c.HSetNX(s.ctx, keyReverts, r.IntentID, b).Err() // idempotent on IntentID
+	return s.c.HSetNX(context.Background(), keyReverts, r.IntentID, b).Err() // idempotent on IntentID
 }
 
 func (s *redisStore) DueReverts(now time.Time) ([]PendingRevert, error) {
-	m, err := s.c.HGetAll(s.ctx, keyReverts).Result()
+	m, err := s.c.HGetAll(context.Background(), keyReverts).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +143,7 @@ func (s *redisStore) DueReverts(now time.Time) ([]PendingRevert, error) {
 }
 
 func (s *redisStore) MarkReverted(id string) error {
-	return s.c.HDel(s.ctx, keyReverts, id).Err()
+	return s.c.HDel(context.Background(), keyReverts, id).Err()
 }
 
 func (s *redisStore) Close() error { return s.c.Close() }

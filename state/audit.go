@@ -30,3 +30,17 @@ func ChainHash(ts, kind, detail, prev string) string {
 	h.Write([]byte(prev))
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// VerifyChain validates a full, ordered audit slice against the hash chain.
+// Backend-agnostic so SQLite and Redis can never drift in how they verify.
+func VerifyChain(es []AuditEntry) bool {
+	prev := ""
+	for _, e := range es {
+		ts := e.TS.UTC().Format(time.RFC3339Nano)
+		if e.PrevHash != prev || e.Hash != ChainHash(ts, e.Kind, e.Detail, prev) {
+			return false
+		}
+		prev = e.Hash
+	}
+	return true
+}

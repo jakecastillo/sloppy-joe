@@ -118,6 +118,13 @@ func (e *Engine) forWindowSatisfied(ruleSHA, corr string, dur time.Duration, now
 	key := ruleSHA + "|" + corr
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	// Opportunistically expire stale windows so a one-shot spike that never
+	// satisfies `for:` can't leak the pending map in a long-running daemon.
+	for k, first := range e.pending {
+		if now.Sub(first) > 2*dur {
+			delete(e.pending, k)
+		}
+	}
 	first, ok := e.pending[key]
 	if !ok {
 		e.pending[key] = now
@@ -157,14 +164,24 @@ func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now
 		return Result{Intent: in, Outcome: OutFailed, Err: err.Error()}
 	}
 	rcpt.Signature = e.signer.Sign([]byte(rcpt.IntentID + string(rcpt.Outcome) + rcpt.Actuator))
-	_ = e.store.MarkIntentApplied(in.ID)
-	_, _ = e.store.AppendAudit("intent.applied", auditDetail(in)+" sig="+short(in.Signature))
+	if err := e.store.MarkIntentApplied(in.ID); err != nil {
+		// A lost idempotency record silently breaks at-most-once — surface it.
+		e.met.Inc("state_write_failed")
+		_, _ = e.store.AppendAudit("intent.mark_failed", auditDetail(in)+fmt.Sprintf(" err=%v", err))
+	}
+	if _, err := e.store.AppendAudit("intent.applied", auditDetail(in)+" sig="+short(in.Signature)); err != nil {
+		e.met.Inc("audit_write_failed")
+	}
 	if in.TTL > 0 {
 		args, _ := json.Marshal(in.Args)
-		_ = e.store.ScheduleRevert(state.PendingRevert{
+		if err := e.store.ScheduleRevert(state.PendingRevert{
 			IntentID: in.ID, Kind: string(in.Kind), Target: in.Target,
 			ArgsJSON: string(args), DueAt: now.Add(in.TTL),
-		})
+		}); err != nil {
+			// The TTL auto-revert safety net wasn't armed — make it observable.
+			e.met.Inc("reverts_unscheduled")
+			_, _ = e.store.AppendAudit("intent.revert_unscheduled", auditDetail(in)+fmt.Sprintf(" err=%v", err))
+		}
 	}
 	e.met.Inc("intents_applied")
 	return Result{Intent: in, Outcome: OutApplied, Receipt: rcpt}
@@ -185,9 +202,14 @@ func (e *Engine) ProcessDueReverts(ctx context.Context, now time.Time) (int, err
 		in := core.RemediationIntent{ID: pr.IntentID, Kind: core.ActionKind(pr.Kind), Target: pr.Target, Args: args}
 		if _, err := e.reg.Revert(ctx, in); err != nil {
 			_, _ = e.store.AppendAudit("intent.revert_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
+			continue // leave it pending so the next tick retries
+		}
+		if err := e.store.MarkReverted(pr.IntentID); err != nil {
+			// Don't count as reverted or it re-fires forever — surface the stuck row.
+			e.met.Inc("reverts_unmarked")
+			_, _ = e.store.AppendAudit("intent.revert_mark_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
 			continue
 		}
-		_ = e.store.MarkReverted(pr.IntentID)
 		_, _ = e.store.AppendAudit("intent.reverted", fmt.Sprintf("%s target=%s", pr.Kind, pr.Target))
 		e.met.Inc("intents_reverted")
 		n++
