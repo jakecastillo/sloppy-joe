@@ -1,0 +1,9 @@
+{
+  "id": "evt-demo-1",
+  "source": "litellm/otel",
+  "type": "cost.budget_burn",
+  "subject": { "tenant": "acme", "alias": "gpt-4o" },
+  "severity": "critical",
+  "correlation_key": "acme:cost",
+  "data": { "spend_1h_usd": 9.0 }
+}
