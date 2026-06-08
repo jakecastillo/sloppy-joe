@@ -15,6 +15,7 @@ import (
 
 	"github.com/sloppyjoe/sloppy/actuator"
 	"github.com/sloppyjoe/sloppy/config"
+	"github.com/sloppyjoe/sloppy/ee"
 	"github.com/sloppyjoe/sloppy/engine"
 	"github.com/sloppyjoe/sloppy/ingest"
 	"github.com/sloppyjoe/sloppy/intent"
@@ -73,8 +74,12 @@ func buildEngine(rulesPath, dbPath, pricebookPath, keyPath string, failClosed bo
 }
 
 // serve runs the ingest HTTP server + the TTL-revert ticker until ctx is cancelled.
-func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.CostLedger, m *metrics.Registry, revertEvery time.Duration, out io.Writer) error {
-	srv := &http.Server{Handler: ingest.NewServer(e, l).SetMetrics(m).Handler()}
+func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.CostLedger, m *metrics.Registry, authz *ee.Authorizer, revertEvery time.Duration, out io.Writer) error {
+	var h http.Handler = ingest.NewServer(e, l).SetMetrics(m).Handler()
+	if authz != nil {
+		h = authz.Middleware(h)
+	}
+	srv := &http.Server{Handler: h}
 
 	go func() {
 		ticker := time.NewTicker(revertEvery)
@@ -112,8 +117,14 @@ func main() {
 	pricebookPath := flag.String("pricebook", "", "price book yaml (optional)")
 	keyPath := flag.String("key", "sloppy.key", "ed25519 signing key file (created if absent)")
 	failClosed := flag.Bool("fail-closed", false, "refuse to act when state is unavailable")
+	authOn := flag.Bool("auth", false, "require API-key RBAC on the HTTP API (keys via SLOPPY_API_KEYS)")
 	revertEvery := flag.Duration("revert-interval", 30*time.Second, "TTL revert scan interval")
 	flag.Parse()
+
+	var authz *ee.Authorizer
+	if *authOn {
+		authz = ee.LoadFromEnv()
+	}
 
 	e, l, m, cleanup, err := buildEngine(*rulesPath, *dbPath, *pricebookPath, *keyPath, *failClosed, os.Stdout)
 	if err != nil {
@@ -129,7 +140,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := serve(ctx, ln, e, l, m, *revertEvery, os.Stdout); err != nil {
+	if err := serve(ctx, ln, e, l, m, authz, *revertEvery, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "serve:", err)
 		os.Exit(1)
 	}
