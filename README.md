@@ -141,7 +141,9 @@ curl localhost:8723/status
 ```
 
 **Commands:** `sloppy inject` · `sloppy test --replay` · `sloppy audit tail` · `sloppy doctor` · `sloppyd` (daemon).
-To wire a real LiteLLM admin API, set `SLOPPY_LITELLM_URL` and `SLOPPY_TOKEN_LITELLM`.
+- **State backend:** `sloppyd --store sqlite` (default) or `--store redis --redis-addr host:6379`.
+- **Auth:** `sloppyd --auth` with `SLOPPY_API_KEYS="key1=ingest:write,status:read"`.
+- **Gateway:** to wire a real LiteLLM admin API, set `SLOPPY_LITELLM_URL` and `SLOPPY_TOKEN_LITELLM`.
 
 ## Principles
 

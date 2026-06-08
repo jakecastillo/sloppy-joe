@@ -1,9 +1,7 @@
 package actuator
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -27,26 +25,19 @@ func (g *GitHub) Capabilities() []core.ActionKind { return []core.ActionKind{cor
 
 // Apply opens an issue carrying the intent id + rule SHA as provenance.
 func (g *GitHub) Apply(ctx context.Context, i core.RemediationIntent) (core.Receipt, error) {
-	repo, _ := i.Args["repo"].(string)
 	tok, err := g.token()
 	if err != nil {
 		return core.Receipt{IntentID: i.ID, Actuator: "github", Outcome: core.OutcomeFailed}, err
 	}
+	repo, _ := i.Args["repo"].(string)
 	payload := map[string]any{
 		"title": fmt.Sprintf("Sloppy Joe: auto-mitigation for %s", i.Target),
 		"body":  fmt.Sprintf("Automated remediation fired.\n\nIntent: `%s`\nRule SHA: `%s`", i.ID, i.RuleSHA),
 	}
-	buf, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/repos/%s/issues", g.baseURL, repo), bytes.NewReader(buf))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := g.client.Do(req)
-	if err != nil {
+	url := fmt.Sprintf("%s/repos/%s/issues", g.baseURL, repo)
+	hdr := map[string]string{"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json"}
+	if err := postJSON(ctx, g.client, url, hdr, payload); err != nil {
 		return core.Receipt{IntentID: i.ID, Actuator: "github", Outcome: core.OutcomeFailed}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return core.Receipt{IntentID: i.ID, Actuator: "github", Outcome: core.OutcomeFailed}, fmt.Errorf("github: %d", resp.StatusCode)
 	}
 	return core.Receipt{IntentID: i.ID, Actuator: "github", AppliedAt: time.Now().UTC(), Outcome: core.OutcomeApplied}, nil
 }
