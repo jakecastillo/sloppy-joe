@@ -99,10 +99,10 @@ flowchart LR
   c2 --> ING
 
   classDef planned stroke-dasharray:6 4,opacity:0.7;
-  class auth,ac4 planned;
+  class auth planned;
 ```
 
-> Dashed = in progress / planned (`ee/` auth and Bifrost/Envoy actuators). Everything else is implemented and tested.
+> Dashed = in progress / planned (`ee/` auth). Everything else is implemented and tested.
 
 The runtime loop — **observe → decide → act → record → revert** — all off the request hot path:
 
