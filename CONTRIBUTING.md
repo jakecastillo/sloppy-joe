@@ -9,8 +9,13 @@ Requires Go (see the version in `go.mod`). No CGO — everything builds static.
 ```bash
 make build        # bin/sloppy + bin/sloppyd (CGO_ENABLED=0)
 make test         # go test ./...
+make hooks        # install the pre-commit gate (gofmt + vet + build + test)
 make ci           # the full CI gate locally: fmt-check + vet + lint + vulncheck + test-race
 ```
+
+**Quality is enforced in three layers (defense in depth):** the `make hooks`
+pre-commit gate (fast, every commit) → `make ci` (full gate, before pushing) →
+GitHub Actions (full gate + build matrix + govulncheck + CodeQL, on every push/PR).
 
 ## The CI gate
 
