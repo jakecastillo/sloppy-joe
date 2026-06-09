@@ -37,3 +37,6 @@ sloppy.key.pub
 # Beads / Dolt files (added by bd init)
 .dolt/
 .beads-credential-key
+
+# Local agent worktrees
+.claude/worktrees/
