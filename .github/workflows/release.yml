@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write # create the GitHub Release + upload artifacts
+  id-token: write # cosign keyless signing (Fulcio OIDC) + provenance
+  attestations: write # SLSA build provenance
 
 jobs:
   goreleaser:
@@ -18,9 +20,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: sigstore/cosign-installer@v3
+      - uses: anchore/sbom-action/download-syft@v0
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt

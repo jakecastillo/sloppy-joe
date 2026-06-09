@@ -34,3 +34,20 @@ checksum:
 
 changelog:
   use: git
+
+sboms:
+  - artifacts: archive
+
+# Keyless cosign signature over the checksums file (covers every artifact).
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    signature: "${artifact}.sig"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true

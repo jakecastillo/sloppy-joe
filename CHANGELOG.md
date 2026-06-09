@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); this project is 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-08
+
 ### Added
 - **v0 control loop** (Plans 1–4): Signal (OTel-GenAI/CloudEvents-shaped) → YAML+CEL
   rule → signed, reversible RemediationIntent → actuator → hash-chained audit. Off the
@@ -32,3 +34,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); this project is 
 ### CI/CD
 - GitHub Actions: lint (gofmt/vet/golangci-lint), test (`-race` + coverage), build
   matrix (linux/macOS/windows), `govulncheck`, CodeQL; Dependabot; goreleaser release.
+
+### Added (post-v0 hardening + governance, Plans 9–20)
+- Flagship demo fixed: `sloppy inject --now` bypasses `for:` windows for one-shot CLI runs.
+- `sloppy rules validate` — zero-infra CI gate (CEL compile + action/budget checks).
+- Governance enforced: `intent_budget` throttling and `rollback: on_clear`.
+- `context.Context` threaded through `state.Store`; Redis idempotency keys bounded
+  (per-id TTL); rule-action logs pruned.
+- Cost ledger persisted behind `state.Store` (survives restarts; pruned + TTL'd).
+- Real per-gateway actuator bodies (LiteLLM `/model/update`); Bifrost/Envoy marked experimental.
+- Structured logging (`log/slog`; `sloppyd --log-format json`).
+- New reversible actions: `throttle_tenant`, `disable_deployment`.
+- Registry graceful-degrade (known-but-unsupported kind → notify) + crash-boundary test.
+- Local end-to-end `docker-compose` stack (Ollama + LiteLLM + Redis + sloppyd) +
+  `//go:build integration` e2e test.
+- Phase-0 demand-validation kit (`docs/phase0/`).
+
+### Security / supply chain
+- Apache-2.0 license with DCO sign-off; NOTICE + AUTHORS.
+- Pre-commit hook (gofmt/vet/build/test) + commit-msg hook (Conventional Commits), via `make hooks`.
+- CI: pinned tool versions (golangci-lint, govulncheck), a 72% coverage floor, and a
+  Conventional-Commits PR check.
+- Releases: SBOM (syft) + cosign keyless signatures + SLSA build provenance.
+
+[0.1.0]: https://github.com/sloppyjoe/sloppy/releases/tag/v0.1.0

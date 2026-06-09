@@ -45,7 +45,7 @@ checks it off, advances; stops when NOW is clear.
   *Satisfied: `go build -tags integration ./...` compiles; compose validates
   structurally (`docker compose config` when Docker is present); README updated.
   Live run needs Docker — flagged, not run in the normal gate.*
-- [ ] **Plan 20 — Cut a trustworthy v0.1.0 (prep).** Pin CI tool versions (drop
+- [x] **Plan 20 — Cut a trustworthy v0.1.0 (prep).** Pin CI tool versions (drop
   `@latest` for golangci-lint + govulncheck), add a coverage floor to CI, extend
   `.goreleaser.yaml` with syft SBOM + cosign keyless signing + SLSA provenance, bump
   CHANGELOG `[Unreleased]` → `[0.1.0]`. *Satisfied: pinned versions runnable; goreleaser
