@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -27,7 +28,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), "sqlite", "", false, io.Discard)
+	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), "sqlite", "", false, io.Discard, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +40,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, ln, e, l, m, nil, time.Hour, io.Discard) }()
+	go func() { done <- serve(ctx, ln, e, l, m, nil, time.Hour, slog.New(slog.DiscardHandler)) }()
 
 	base := "http://" + ln.Addr().String()
 	var resp *http.Response
@@ -95,7 +96,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), "sqlite", "", false, io.Discard)
+	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), "sqlite", "", false, io.Discard, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, ln, e, l, m, authz, time.Hour, io.Discard) }()
+	go func() { done <- serve(ctx, ln, e, l, m, authz, time.Hour, slog.New(slog.DiscardHandler)) }()
 	base := "http://" + ln.Addr().String()
 
 	var resp *http.Response

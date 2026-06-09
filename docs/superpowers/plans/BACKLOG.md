@@ -20,7 +20,7 @@ checks it off, advances; stops when NOW is clear.
   + `model_info`); mark Bifrost/Envoy experimental in godoc. *Satisfied: per-gateway
   httptest tests assert each body + all pass `actuator.Conformance`. (Live LiteLLM
   verification lands with the Plan 19 integration test.)*
-- [ ] **Plan 16 — Structured logging (`log/slog`).** Thread a `*slog.Logger` from
+- [x] **Plan 16 — Structured logging (`log/slog`).** Thread a `*slog.Logger` from
   `cmd/sloppyd` into engine + actuators (text for TTY, JSON via `--log-format=json`),
   carrying intent-id, rule SHA, correlation-key, target, outcome on decision/error
   paths; keep human stdout for the CLI. *Satisfied: engine `WithLogger` option
