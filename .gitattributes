@@ -1,0 +1,16 @@
+# Pin Go source to LF on every OS so gofmt and CI never trip on CRLF.
+# This repo is checked out on Windows with core.autocrlf=true and had no
+# .gitattributes, which made `gofmt -l` flag every .go file (the blobs are
+# already LF; only the working tree was CRLF) and fail the format gate.
+# Broader text/eol normalization is tracked as a follow-up.
+* text=auto
+*.go text eol=lf
+
+# Binaries: never normalize.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.gz binary
+*.zip binary
