@@ -41,6 +41,7 @@ it's built).
 | Doc | What's in it |
 |---|---|
 | [`phase0/README.md`](phase0/README.md) | The demand-validation kit and the GO / PIVOT / STOP decision rule. |
+| [`phase0/target-profile.md`](phase0/target-profile.md) | Who to recruit — the screening filter (must-haves, disqualifiers, where to find them). |
 | [`phase0/discovery-script.md`](phase0/discovery-script.md) | The 5-question, ~20-minute discovery interview. |
 | [`phase0/demo-script.md`](phase0/demo-script.md) | The 5-minute live demo to show design partners. |
 | [`phase0/kill-criteria.md`](phase0/kill-criteria.md) | The explicit conditions under which we stop or pivot. |
