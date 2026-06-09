@@ -1,7 +1,12 @@
-.PHONY: test test-race cover build fmt vet lint vulncheck tidy ci
+.PHONY: test test-race cover build fmt vet lint vulncheck tidy ci hooks
 
 # Mirror the CI gates so `make ci` reproduces the pipeline locally.
 ci: fmt-check vet lint vulncheck test-race
+
+# Install the pre-commit gate (gofmt + vet + build + test on every commit).
+hooks:
+	git config core.hooksPath .githooks
+	@echo "git hooks installed (.githooks/pre-commit active)"
 
 test:
 	go test ./...
