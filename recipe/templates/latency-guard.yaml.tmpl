@@ -1,0 +1,9 @@
+# recipe: latency-guard v1
+on: {{ .Params.On }}
+when: signal.data.p95_latency_ms > {{ .Params.ThresholdP95Ms }}
+then:
+  - page: { slack: "{{ .Slack.Channel }}" }
+{{- if and .Params.Notify.OpenIssue .Github.Enabled }}
+  - open_issue: { repo: {{ .Github.Repo }} }
+{{- end }}
+with: { dry_run: false }

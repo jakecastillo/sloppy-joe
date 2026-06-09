@@ -1,0 +1,9 @@
+# recipe: fallback-storm v1
+on: {{ .Params.On }}
+when: signal.severity == "{{ .Params.Severity }}"
+then:
+  - page: { slack: "{{ .Slack.Channel }}" }
+{{- if and .Params.Notify.OpenIssue .Github.Enabled }}
+  - open_issue: { repo: {{ .Github.Repo }} }
+{{- end }}
+with: { dry_run: false }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	sloppyjoe "github.com/sloppyjoe/sloppy"
 	"github.com/sloppyjoe/sloppy/actuator"
@@ -16,6 +17,7 @@ import (
 	"github.com/sloppyjoe/sloppy/doctor"
 	"github.com/sloppyjoe/sloppy/engine"
 	"github.com/sloppyjoe/sloppy/intent"
+	"github.com/sloppyjoe/sloppy/recipe"
 	"github.com/sloppyjoe/sloppy/replay"
 	"github.com/sloppyjoe/sloppy/rules"
 	"github.com/sloppyjoe/sloppy/state"
@@ -23,7 +25,7 @@ import (
 
 func run(args []string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: sloppy <version|inject|rules|audit|test|doctor|config|platform>")
+		fmt.Fprintln(out, "usage: sloppy <version|inject|rules|audit|test|doctor|config|platform|recipe>")
 		return 2
 	}
 	switch args[0] {
@@ -44,6 +46,8 @@ func run(args []string, out io.Writer) int {
 		return cmdConfig(args[1:], out)
 	case "platform":
 		return cmdPlatform(args[1:], out)
+	case "recipe":
+		return cmdRecipe(args[1:], out)
 	default:
 		fmt.Fprintf(out, "unknown command: %s\n", args[0])
 		return 2
@@ -299,7 +303,7 @@ func cmdConfig(args []string, out io.Writer) int {
 		}
 		return 0
 	case "validate":
-		f, _, err := config.LoadFile(*cfgPath)
+		f, existed, err := config.LoadFile(*cfgPath)
 		if err != nil {
 			fmt.Fprintf(out, "✗ %v\n", err)
 			return 1
@@ -307,6 +311,12 @@ func cmdConfig(args []string, out io.Writer) int {
 		probs := config.Validate(f)
 		for _, p := range probs {
 			fmt.Fprintf(out, "✗ %s\n", p)
+		}
+		// Render enabled recipes too, so bad params / templates fail the gate.
+		eff := config.Resolve(f, existed, config.FlagOverrides{}, os.Getenv)
+		if _, rerr := bootstrap.RenderRecipes(eff); rerr != nil {
+			fmt.Fprintf(out, "✗ recipes: %v\n", rerr)
+			probs = append(probs, config.Problem{Path: "recipes", Msg: rerr.Error()})
 		}
 		if len(probs) > 0 {
 			fmt.Fprintf(out, "%d problem(s)\n", len(probs))
@@ -365,6 +375,68 @@ func cmdPlatform(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "%-9s %-9s %s%s\n", n, status, tok, exp)
 	}
 	return 0
+}
+
+// cmdRecipe lists the curated recipes (with enabled status) and renders a recipe to
+// the exact rule it produces (+ its content-hash SHA), all read-only.
+func cmdRecipe(args []string, out io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(out, "usage: sloppy recipe <list|show> [name] [--config sloppy.yaml]")
+		return 2
+	}
+	sub := args[0]
+	rest := args[1:]
+	name := ""
+	if sub == "show" && len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		name = rest[0]
+		rest = rest[1:]
+	}
+	fs := flag.NewFlagSet("recipe "+sub, flag.ContinueOnError)
+	fs.SetOutput(out)
+	cfgPath := fs.String("config", "sloppy.yaml", "path to sloppy.yaml")
+	if err := fs.Parse(rest); err != nil {
+		return 2
+	}
+	f, existed, err := config.LoadFile(*cfgPath)
+	if err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	eff := config.Resolve(f, existed, config.FlagOverrides{}, os.Getenv)
+	switch sub {
+	case "list":
+		for _, n := range recipe.Names() {
+			status := "available"
+			if rc, ok := eff.Recipes[n]; ok {
+				status = "disabled"
+				if rc.Enabled {
+					status = "enabled"
+				}
+			}
+			fmt.Fprintf(out, "%-15s %-10s %s\n", n, status, recipe.Summary(n))
+		}
+		return 0
+	case "show":
+		if name == "" {
+			fmt.Fprintln(out, "usage: sloppy recipe show <name> [--config sloppy.yaml]")
+			return 2
+		}
+		if !recipe.Known(name) {
+			fmt.Fprintf(out, "unknown recipe %q (have: %s)\n", name, strings.Join(recipe.Names(), ", "))
+			return 1
+		}
+		text, sha, err := bootstrap.RenderRecipeText(eff, name)
+		if err != nil {
+			fmt.Fprintf(out, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(out, text)
+		fmt.Fprintf(out, "# rendered rule sha: %s\n", sha)
+		return 0
+	default:
+		fmt.Fprintf(out, "unknown recipe subcommand: %s\n", sub)
+		return 2
+	}
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout)) }
