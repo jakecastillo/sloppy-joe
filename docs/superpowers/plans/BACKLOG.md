@@ -39,7 +39,7 @@ checks it off, advances; stops when NOW is clear.
   MarkIntentApplied *after* the actuator call → assert no double-apply on resume,
   reverts stay pending + retry, and the `reverts_unmarked` / `state_write_failed`
   metrics fire. *Satisfied: degrade test + crash-boundary test.*
-- [ ] **Plan 19 — docker-compose + integration test.** `docker-compose.yml`
+- [x] **Plan 19 — docker-compose + integration test.** `docker-compose.yml`
   (sloppyd + LiteLLM + Ollama + Redis) and a `//go:build integration` e2e test driving
   a cost spike → reroute/revert against the live stack; README deploy section.
   *Satisfied: `go build -tags integration ./...` compiles; compose validates

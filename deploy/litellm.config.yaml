@@ -1,0 +1,11 @@
+# Minimal LiteLLM config for the local end-to-end stack: alias gpt-4o -> a local
+# Ollama model so the demo runs with no provider keys.
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: ollama/llama3
+      api_base: http://ollama:11434
+litellm_settings:
+  drop_params: true
+general_settings:
+  master_key: sk-sloppy-dev

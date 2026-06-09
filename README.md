@@ -156,6 +156,29 @@ curl localhost:8723/status
 - **Issue-driven · automation-first** — and multi-purpose, not single-purpose
 - **Never holds your provider keys** — those stay in the gateway
 
+## Deploy (local end-to-end)
+
+A `docker-compose.yml` brings up the whole loop — Ollama (local model), LiteLLM
+(gateway), Redis (state), and `sloppyd` (the control loop), no provider keys
+required:
+
+```bash
+docker compose up -d --build
+# drive a cost spike and watch it remediate:
+curl -XPOST localhost:8723/v1/signals -d @examples/signals/cost-spike.json
+curl localhost:8723/status
+```
+
+The end-to-end test runs against that stack. It's guarded by the `integration`
+build tag, so it never runs in the normal suite:
+
+```bash
+SLOPPY_E2E_BASE=http://localhost:8723 go test -tags integration ./test/e2e/...
+```
+
+> The LiteLLM admin schemas the actuators use are still provisional — this stack
+> is where you verify them against a real gateway.
+
 ## License
 
 Sloppy Joe is licensed under the **[Apache License 2.0](LICENSE)** — permissive,

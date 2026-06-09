@@ -1,0 +1,7 @@
+.git/
+bin/
+*.db
+*.key
+*.db-wal
+*.db-shm
+docs/

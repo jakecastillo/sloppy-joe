@@ -1,0 +1,62 @@
+# Local end-to-end stack: Ollama (local model) + LiteLLM (gateway) + Redis
+# (state) + sloppyd (the control loop). No provider keys required.
+#
+#   docker compose up -d --build
+#   curl -XPOST localhost:8723/v1/signals -d @examples/signals/cost-spike.json
+#   curl localhost:8723/status
+#   SLOPPY_E2E_BASE=http://localhost:8723 go test -tags integration ./test/e2e/...
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes: ["ollama:/root/.ollama"]
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    depends_on: [ollama]
+    ports: ["4000:4000"]
+    volumes:
+      - ./deploy/litellm.config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  sloppyd:
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+    ports: ["8723:8723"]
+    environment:
+      SLOPPY_LITELLM_URL: http://litellm:4000
+      SLOPPY_TOKEN_LITELLM: sk-sloppy-dev
+    command:
+      - "--addr"
+      - ":8723"
+      - "--rules"
+      - "/app/examples/rules"
+      - "--store"
+      - "redis"
+      - "--redis-addr"
+      - "redis:6379"
+      - "--db"
+      - "/data/sloppy.db"
+      - "--key"
+      - "/data/sloppy.key"
+      - "--log-format"
+      - "json"
+    volumes:
+      - sloppydata:/data
+
+volumes:
+  ollama:
+  sloppydata:
