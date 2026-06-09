@@ -93,6 +93,26 @@ func storeContract(t *testing.T, s Store) {
 		t.Fatalf("cleared outstanding should be empty: %+v", outs)
 	}
 
+	// Cost-ledger usage accounting.
+	if err := s.RecordUsage(ctx, "acme", "gpt-4o", 5.0, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordUsage(ctx, "acme", "gpt-4o", 7.5, base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if spend, _ := s.SpendSince(ctx, "acme", base); spend != 12.5 {
+		t.Fatalf("want spend 12.5, got %v", spend)
+	}
+	if spend, _ := s.SpendSince(ctx, "other", base); spend != 0 {
+		t.Fatalf("other tenant should be 0, got %v", spend)
+	}
+	if spend, _ := s.SpendSince(ctx, "acme", base.Add(time.Hour)); spend != 0 {
+		t.Fatalf("future window should be 0, got %v", spend)
+	}
+	if err := s.PruneUsage(ctx, base.Add(time.Hour)); err != nil {
+		t.Fatalf("PruneUsage: %v", err) // no-op on Redis; deletes pre-cutoff rows on SQLite
+	}
+
 	// Concurrency: parallel appends must keep the tamper-evident chain intact.
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {

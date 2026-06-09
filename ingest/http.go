@@ -121,6 +121,9 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 			at = parsed
 		}
 	}
-	s.ledger.Record(u.Tenant, u.Model, u.InputTokens, u.OutputTokens, at)
+	if err := s.ledger.Record(r.Context(), u.Tenant, u.Model, u.InputTokens, u.OutputTokens, at); err != nil {
+		http.Error(w, "record error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 }

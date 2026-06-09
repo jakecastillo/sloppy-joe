@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -18,6 +19,8 @@ const (
 	appliedRetention = 30 * 24 * time.Hour
 	// actionRetention bounds the per-rule firing log (>> the longest budget window).
 	actionRetention = 7 * 24 * time.Hour
+	// usageRetention bounds per-tenant usage (>> the longest spend window).
+	usageRetention = 48 * time.Hour
 )
 
 type redisStore struct {
@@ -192,5 +195,43 @@ func (s *redisStore) Outstanding(ctx context.Context, key string) ([]PendingReve
 func (s *redisStore) ClearOutstanding(ctx context.Context, key string) error {
 	return s.c.Del(ctx, "sloppy:onclear:"+key).Err()
 }
+
+func (s *redisStore) RecordUsage(ctx context.Context, tenant, model string, cost float64, at time.Time) error {
+	key := "sloppy:usage:" + tenant
+	ns := at.UnixNano()
+	member := fmt.Sprintf("%d:%g:%s", ns, cost, model) // unique-ish; carries the cost
+	if err := s.c.ZAdd(ctx, key, redis.Z{Score: float64(ns), Member: member}).Err(); err != nil {
+		return err
+	}
+	cutoff := at.Add(-usageRetention).UnixNano()
+	_ = s.c.ZRemRangeByScore(ctx, key, "-inf", "("+strconv.FormatInt(cutoff, 10)).Err()
+	return s.c.Expire(ctx, key, usageRetention).Err()
+}
+
+func (s *redisStore) SpendSince(ctx context.Context, tenant string, since time.Time) (float64, error) {
+	members, err := s.c.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     "sloppy:usage:" + tenant,
+		Start:   strconv.FormatInt(since.UnixNano(), 10),
+		Stop:    "+inf",
+		ByScore: true,
+	}).Result()
+	if err != nil {
+		return 0, err
+	}
+	var sum float64
+	for _, m := range members {
+		parts := strings.SplitN(m, ":", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		c, _ := strconv.ParseFloat(parts[1], 64)
+		sum += c
+	}
+	return sum, nil
+}
+
+// PruneUsage is a no-op for Redis: usage keys self-prune on write (ZREMRANGEBYSCORE)
+// and carry a TTL, so there's no unbounded growth to sweep.
+func (s *redisStore) PruneUsage(ctx context.Context, before time.Time) error { return nil }
 
 func (s *redisStore) Close() error { return s.c.Close() }

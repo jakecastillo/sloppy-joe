@@ -5,7 +5,26 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestSQLiteUsagePrune(t *testing.T) {
+	ctx := context.Background()
+	s, _ := OpenSQLite(filepath.Join(t.TempDir(), "u.db"))
+	defer s.Close()
+	base := time.Unix(1749340800, 0).UTC()
+	_ = s.RecordUsage(ctx, "acme", "m", 1.0, base.Add(-2*time.Hour)) // old
+	_ = s.RecordUsage(ctx, "acme", "m", 2.0, base)                   // recent
+	if spend, _ := s.SpendSince(ctx, "acme", base.Add(-3*time.Hour)); spend != 3.0 {
+		t.Fatalf("pre-prune want 3.0, got %v", spend)
+	}
+	if err := s.PruneUsage(ctx, base.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if spend, _ := s.SpendSince(ctx, "acme", base.Add(-3*time.Hour)); spend != 2.0 {
+		t.Fatalf("post-prune want 2.0 (old pruned), got %v", spend)
+	}
+}
 
 func TestSQLiteIdempotencyAndAuditPersist(t *testing.T) {
 	ctx := context.Background()
