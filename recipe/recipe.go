@@ -14,8 +14,9 @@ import (
 	"sort"
 	"text/template"
 
-	"github.com/sloppyjoe/sloppy/rules"
 	"gopkg.in/yaml.v3"
+
+	"github.com/sloppyjoe/sloppy/rules"
 )
 
 //go:embed templates/*.yaml.tmpl

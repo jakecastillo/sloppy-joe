@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/google/cel-go/cel"
+
 	"github.com/sloppyjoe/sloppy/core"
 )
 

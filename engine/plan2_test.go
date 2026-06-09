@@ -50,8 +50,10 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 `, WithClock(clock))
 	defer st.Close()
 
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 
 	// First sighting → pending, not applied.
 	res, _ := e.Handle(context.Background(), sig)
@@ -93,8 +95,10 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 `, WithLedger(l), WithClock(func() time.Time { return now }))
 	defer st.Close()
 
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Tenant: "acme", Alias: "gpt-4o"}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Tenant: "acme", Alias: "gpt-4o"},
+	}
 	res, _ := e.Handle(context.Background(), sig)
 	if countApplied(res) != 1 || f.Applied != 1 {
 		t.Fatalf("ledger-driven rule should fire, applied=%d fake=%d", countApplied(res), f.Applied)
@@ -111,8 +115,10 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]
 `, WithClock(func() time.Time { return now }))
 	defer st.Close()
 
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 	if res, _ := e.Handle(context.Background(), sig); countApplied(res) != 1 {
 		t.Fatal("expected apply")
 	}

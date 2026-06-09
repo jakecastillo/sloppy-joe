@@ -54,8 +54,10 @@ func (a *httpRouteActuator) Apply(ctx context.Context, i core.RemediationIntent)
 		return core.Receipt{IntentID: i.ID, Actuator: a.name, Outcome: core.OutcomeFailed}, err
 	}
 	to, _ := i.Args["to"].(string)
-	return core.Receipt{IntentID: i.ID, Actuator: a.name, AppliedAt: time.Now().UTC(),
-		Before: i.Target, After: to, Outcome: core.OutcomeApplied}, nil
+	return core.Receipt{
+		IntentID: i.ID, Actuator: a.name, AppliedAt: time.Now().UTC(),
+		Before: i.Target, After: to, Outcome: core.OutcomeApplied,
+	}, nil
 }
 
 func (a *httpRouteActuator) Revert(ctx context.Context, i core.RemediationIntent) (core.Receipt, error) {

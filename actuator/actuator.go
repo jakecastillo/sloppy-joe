@@ -114,6 +114,7 @@ type Fake struct {
 func (f *Fake) Capabilities() []core.ActionKind {
 	return []core.ActionKind{core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage, core.ActionThrottleTenant, core.ActionDisableDeployment}
 }
+
 func (f *Fake) Apply(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	f.Applied++
 	if f.ApplyErr != nil {
@@ -121,6 +122,7 @@ func (f *Fake) Apply(_ context.Context, i core.RemediationIntent) (core.Receipt,
 	}
 	return core.Receipt{IntentID: i.ID, Actuator: "fake", Outcome: core.OutcomeApplied}, nil
 }
+
 func (f *Fake) Revert(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	f.Reverted++
 	if f.RevertErr != nil {
@@ -136,10 +138,12 @@ type Log struct{ W io.Writer }
 func (l *Log) Capabilities() []core.ActionKind {
 	return []core.ActionKind{core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage, core.ActionThrottleTenant, core.ActionDisableDeployment}
 }
+
 func (l *Log) Apply(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	fmt.Fprintf(l.W, "  → %s target=%s args=%v\n", i.Kind, i.Target, i.Args)
 	return core.Receipt{IntentID: i.ID, Actuator: "log", AppliedAt: time.Now().UTC(), Outcome: core.OutcomeApplied}, nil
 }
+
 func (l *Log) Revert(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	fmt.Fprintf(l.W, "  ↩ revert %s target=%s\n", i.Kind, i.Target)
 	return core.Receipt{IntentID: i.ID, Actuator: "log", Outcome: core.OutcomeReverted}, nil

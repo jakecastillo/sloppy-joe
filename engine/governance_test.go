@@ -44,8 +44,10 @@ with: { intent_budget: "2/h" }
 	defer st.Close()
 
 	mk := func(corr string) core.Signal {
-		return core.Signal{Type: "cost.budget_burn", CorrelationKey: corr,
-			Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+		return core.Signal{
+			Type: "cost.budget_burn", CorrelationKey: corr,
+			Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+		}
 	}
 	r1, _ := e.Handle(context.Background(), mk("a1"))
 	r2, _ := e.Handle(context.Background(), mk("a2"))
@@ -78,8 +80,10 @@ with: { rollback: on_clear }
 `, now)
 	defer st.Close()
 
-	hi := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	hi := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 	lo := hi
 	lo.Data = map[string]any{"spend_1h_usd": 1.0}
 

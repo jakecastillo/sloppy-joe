@@ -36,8 +36,10 @@ func TestClosedLoopAgainstMockLiteLLM_Restart(t *testing.T) {
 	signer, _ := intent.NewEd25519Signer()
 
 	dbpath := t.TempDir() + "/loop.db"
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 
 	st1, _ := state.OpenSQLite(dbpath)
 	e1 := New(rec, reg, st1, signer)

@@ -105,8 +105,10 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]
 	e := engine.New(rec, reg, inner, signer, engine.WithMetrics(m),
 		engine.WithClock(func() time.Time { return base }))
 
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 	if _, err := e.Handle(context.Background(), sig); err != nil {
 		t.Fatal(err)
 	}

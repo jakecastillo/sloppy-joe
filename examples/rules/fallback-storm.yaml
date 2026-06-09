@@ -2,5 +2,5 @@
 on: fallback.fired
 when: signal.severity == "critical"
 then:
-  - page: { slack: "#oncall" }
-with: { dry_run: false }
+  - page: {slack: "#oncall"}
+with: {dry_run: false}
