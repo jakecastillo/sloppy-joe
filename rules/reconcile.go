@@ -64,6 +64,22 @@ func (rc *Reconciler) Reconcile(sig core.Signal, state map[string]any) []core.Re
 	return intents
 }
 
+// Cleared returns the `rollback: on_clear` rules of this signal's type whose
+// condition is now FALSE (the incident has cleared), so the engine can revert
+// their outstanding intents.
+func (rc *Reconciler) Cleared(sig core.Signal, state map[string]any) []Rule {
+	var out []Rule
+	for _, cr := range rc.rules {
+		if cr.rule.On != sig.Type || cr.rule.With.Rollback != "on_clear" {
+			continue
+		}
+		if ok, err := cr.cond.Eval(sig, state); err == nil && !ok {
+			out = append(out, cr.rule)
+		}
+	}
+	return out
+}
+
 func actionToIntent(a Action, r Rule, sig core.Signal) core.RemediationIntent {
 	target := sig.Subject.Alias
 	ttl := time.Duration(0)

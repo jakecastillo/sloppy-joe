@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE TABLE IF NOT EXISTS pending_reverts (
   intent_id TEXT PRIMARY KEY,
   kind TEXT, target TEXT, args TEXT, due_at TEXT
+);
+CREATE TABLE IF NOT EXISTS rule_actions (rule_sha TEXT, ts TEXT);
+CREATE INDEX IF NOT EXISTS idx_rule_actions ON rule_actions(rule_sha, ts);
+CREATE TABLE IF NOT EXISTS onclear (
+  key TEXT, intent_id TEXT, kind TEXT, target TEXT, args TEXT,
+  PRIMARY KEY(key, intent_id)
 );`
 
 // OpenSQLite opens (and migrates) a SQLite-backed Store. Pure-Go driver (no cgo).
@@ -135,6 +141,46 @@ func (s *sqliteStore) DueReverts(now time.Time) ([]PendingRevert, error) {
 
 func (s *sqliteStore) MarkReverted(intentID string) error {
 	_, err := s.db.Exec(`DELETE FROM pending_reverts WHERE intent_id=?`, intentID)
+	return err
+}
+
+func (s *sqliteStore) RecordAction(ruleSHA string, at time.Time) error {
+	_, err := s.db.Exec(`INSERT INTO rule_actions(rule_sha,ts) VALUES(?,?)`, ruleSHA, at.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *sqliteStore) CountActions(ruleSHA string, since time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM rule_actions WHERE rule_sha=? AND ts>=?`,
+		ruleSHA, since.UTC().Format(time.RFC3339Nano)).Scan(&n)
+	return n, err
+}
+
+func (s *sqliteStore) RecordOutstanding(key string, r PendingRevert) error {
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO onclear(key,intent_id,kind,target,args) VALUES(?,?,?,?,?)`,
+		key, r.IntentID, r.Kind, r.Target, r.ArgsJSON)
+	return err
+}
+
+func (s *sqliteStore) Outstanding(key string) ([]PendingRevert, error) {
+	rows, err := s.db.Query(`SELECT intent_id,kind,target,args FROM onclear WHERE key=?`, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingRevert
+	for rows.Next() {
+		var r PendingRevert
+		if err := rows.Scan(&r.IntentID, &r.Kind, &r.Target, &r.ArgsJSON); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *sqliteStore) ClearOutstanding(key string) error {
+	_, err := s.db.Exec(`DELETE FROM onclear WHERE key=?`, key)
 	return err
 }
 

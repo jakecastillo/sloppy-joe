@@ -23,11 +23,12 @@ import (
 type Outcome string
 
 const (
-	OutApplied Outcome = "applied"
-	OutDryRun  Outcome = "dry_run"
-	OutSkipped Outcome = "skipped_idempotent"
-	OutFailed  Outcome = "failed"
-	OutPending Outcome = "pending_for_window"
+	OutApplied   Outcome = "applied"
+	OutDryRun    Outcome = "dry_run"
+	OutSkipped   Outcome = "skipped_idempotent"
+	OutFailed    Outcome = "failed"
+	OutPending   Outcome = "pending_for_window"
+	OutThrottled Outcome = "throttled"
 )
 
 // FailMode decides behaviour when the state store is unreachable.
@@ -105,18 +106,79 @@ func (e *Engine) Handle(ctx context.Context, sig core.Signal) ([]Result, error) 
 	if e.led != nil {
 		st = e.led.StateFor(sig.Subject.Tenant, now)
 	}
-	matches := e.rec.EvaluateMatches(sig, st)
 	var results []Result
-	for _, m := range matches {
+	for _, m := range e.rec.EvaluateMatches(sig, st) {
 		if m.Rule.For > 0 && !e.immediate && !e.forWindowSatisfied(m.Rule.SHA, sig.CorrelationKey, m.Rule.For, now) {
 			results = append(results, Result{Intent: core.RemediationIntent{RuleSHA: m.Rule.SHA}, Outcome: OutPending})
 			continue
 		}
+		if e.throttled(m.Rule, now) {
+			results = append(results, Result{Intent: core.RemediationIntent{RuleSHA: m.Rule.SHA}, Outcome: OutThrottled})
+			continue
+		}
+		var applied []core.RemediationIntent
 		for _, in := range m.Intents {
-			results = append(results, e.applyIntent(ctx, in, now))
+			r := e.applyIntent(ctx, in, now)
+			results = append(results, r)
+			if r.Outcome == OutApplied {
+				applied = append(applied, r.Intent)
+			}
+		}
+		if m.Rule.With.Rollback == "on_clear" && len(applied) > 0 {
+			key := m.Rule.SHA + "|" + sig.CorrelationKey
+			for _, in := range applied {
+				args, _ := json.Marshal(in.Args)
+				_ = e.store.RecordOutstanding(key, state.PendingRevert{
+					IntentID: in.ID, Kind: string(in.Kind), Target: in.Target, ArgsJSON: string(args),
+				})
+			}
 		}
 	}
+	// rollback:on_clear — revert outstanding intents for rules whose condition cleared.
+	for _, r := range e.rec.Cleared(sig, st) {
+		e.rollbackOnClear(ctx, r, sig.CorrelationKey)
+	}
 	return results, nil
+}
+
+// throttled enforces intent_budget per (rule, window): true when the budget is
+// exhausted, otherwise it records this firing.
+func (e *Engine) throttled(r rules.Rule, now time.Time) bool {
+	count, window, err := rules.ParseIntentBudget(r.With.IntentBudget)
+	if err != nil || count == 0 {
+		return false // unset / unlimited
+	}
+	used, _ := e.store.CountActions(r.SHA, now.Add(-window))
+	if used >= count {
+		_, _ = e.store.AppendAudit("intent.throttled", fmt.Sprintf("rule=%s budget=%s used=%d", r.SHA, r.With.IntentBudget, used))
+		e.met.Inc("intents_throttled")
+		return true
+	}
+	_ = e.store.RecordAction(r.SHA, now)
+	return false
+}
+
+// rollbackOnClear reverts and clears a rule's outstanding on-clear intents.
+func (e *Engine) rollbackOnClear(ctx context.Context, r rules.Rule, corr string) {
+	key := r.SHA + "|" + corr
+	outs, _ := e.store.Outstanding(key)
+	if len(outs) == 0 {
+		return
+	}
+	for _, pr := range outs {
+		var args map[string]any
+		if pr.ArgsJSON != "" {
+			_ = json.Unmarshal([]byte(pr.ArgsJSON), &args)
+		}
+		in := core.RemediationIntent{ID: pr.IntentID, Kind: core.ActionKind(pr.Kind), Target: pr.Target, Args: args}
+		if _, err := e.reg.Revert(ctx, in); err != nil {
+			_, _ = e.store.AppendAudit("intent.rollback_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
+			continue
+		}
+		_, _ = e.store.AppendAudit("intent.rolled_back", fmt.Sprintf("%s target=%s (condition cleared)", pr.Kind, pr.Target))
+	}
+	_ = e.store.ClearOutstanding(key)
+	e.met.Inc("intents_rolled_back")
 }
 
 func (e *Engine) forWindowSatisfied(ruleSHA, corr string, dur time.Duration, now time.Time) bool {

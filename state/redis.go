@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -144,6 +145,43 @@ func (s *redisStore) DueReverts(now time.Time) ([]PendingRevert, error) {
 
 func (s *redisStore) MarkReverted(id string) error {
 	return s.c.HDel(context.Background(), keyReverts, id).Err()
+}
+
+func (s *redisStore) RecordAction(ruleSHA string, at time.Time) error {
+	ns := at.UnixNano()
+	return s.c.ZAdd(context.Background(), "sloppy:ract:"+ruleSHA,
+		redis.Z{Score: float64(ns), Member: strconv.FormatInt(ns, 10)}).Err()
+}
+
+func (s *redisStore) CountActions(ruleSHA string, since time.Time) (int, error) {
+	n, err := s.c.ZCount(context.Background(), "sloppy:ract:"+ruleSHA,
+		strconv.FormatInt(since.UnixNano(), 10), "+inf").Result()
+	return int(n), err
+}
+
+func (s *redisStore) RecordOutstanding(key string, r PendingRevert) error {
+	b, _ := json.Marshal(revertRec{Kind: r.Kind, Target: r.Target, Args: r.ArgsJSON})
+	return s.c.HSet(context.Background(), "sloppy:onclear:"+key, r.IntentID, b).Err()
+}
+
+func (s *redisStore) Outstanding(key string) ([]PendingRevert, error) {
+	m, err := s.c.HGetAll(context.Background(), "sloppy:onclear:"+key).Result()
+	if err != nil {
+		return nil, err
+	}
+	var out []PendingRevert
+	for id, v := range m {
+		var rec revertRec
+		if json.Unmarshal([]byte(v), &rec) != nil {
+			continue
+		}
+		out = append(out, PendingRevert{IntentID: id, Kind: rec.Kind, Target: rec.Target, ArgsJSON: rec.Args})
+	}
+	return out, nil
+}
+
+func (s *redisStore) ClearOutstanding(key string) error {
+	return s.c.Del(context.Background(), "sloppy:onclear:"+key).Err()
 }
 
 func (s *redisStore) Close() error { return s.c.Close() }
