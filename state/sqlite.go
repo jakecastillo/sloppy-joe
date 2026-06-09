@@ -3,9 +3,11 @@ package state
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type sqliteStore struct{ db *sql.DB }
@@ -46,17 +48,37 @@ func OpenSQLite(path string) (Store, error) {
 	return &sqliteStore{db: db}, nil
 }
 
-func (s *sqliteStore) IsIntentApplied(ctx context.Context, id string) (bool, error) {
-	var x string
-	err := s.db.QueryRowContext(ctx, `SELECT intent_id FROM applied_intents WHERE intent_id=?`, id).Scan(&x)
-	if err == sql.ErrNoRows {
-		return false, nil
+// ClaimIntent inserts the idempotency key in one statement. A plain INSERT (not
+// OR IGNORE) lets us distinguish the winner from a loser: the winner affects one
+// row; a duplicate trips the PRIMARY KEY constraint, which we treat as a clean
+// "someone else already claimed it" (false, nil) rather than an I/O error. With
+// SetMaxOpenConns(1) writes serialize, so concurrent claims of the same id can
+// never both succeed.
+func (s *sqliteStore) ClaimIntent(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `INSERT INTO applied_intents(intent_id) VALUES(?)`, id)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return false, nil // already claimed by another caller — not an error
+		}
+		return false, err
 	}
-	return err == nil, err
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
-func (s *sqliteStore) MarkIntentApplied(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO applied_intents(intent_id) VALUES(?)`, id)
+// isUniqueViolation reports whether err is a SQLite PRIMARY KEY / UNIQUE
+// constraint failure (extended codes share the SQLITE_CONSTRAINT primary code).
+func isUniqueViolation(err error) bool {
+	var se *sqlite.Error
+	return errors.As(err, &se) && se.Code()&0xff == sqlite3.SQLITE_CONSTRAINT
+}
+
+// ReleaseIntent deletes the idempotency key so a failed actuation can be retried.
+func (s *sqliteStore) ReleaseIntent(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM applied_intents WHERE intent_id=?`, id)
 	return err
 }
 

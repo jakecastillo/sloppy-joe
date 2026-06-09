@@ -18,8 +18,20 @@ type PendingRevert struct {
 // Every I/O method takes a context so callers' cancellation/deadlines reach the
 // backend (Close is teardown and intentionally context-free).
 type Store interface {
-	IsIntentApplied(ctx context.Context, intentID string) (bool, error)
-	MarkIntentApplied(ctx context.Context, intentID string) error
+	// ClaimIntent atomically records the idempotency key for intentID and reports
+	// whether THIS caller created it. It is the at-most-once gate that closes the
+	// apply-twice TOCTOU: with N concurrent callers for one id, exactly one gets
+	// claimed==true (it then actuates); the rest get false (they skip). A losing
+	// claim is not an error. Backed by a single conditional write (SQLite
+	// INSERT + PK conflict; Redis SET NX), never an in-process lock, so the gate
+	// holds across replicas.
+	ClaimIntent(ctx context.Context, intentID string) (claimed bool, err error)
+	// ReleaseIntent removes a previously claimed idempotency key so the intent can
+	// be re-attempted. The engine calls it only when actuation FAILS after a
+	// winning claim, so a transient actuator error doesn't permanently poison the
+	// id (without it, claim-before-apply would make every failed apply un-retryable).
+	// Releasing an absent key is a no-op.
+	ReleaseIntent(ctx context.Context, intentID string) error
 	AppendAudit(ctx context.Context, kind, detail string) (AuditEntry, error)
 	Audit(ctx context.Context) ([]AuditEntry, error)
 	VerifyAudit(ctx context.Context) bool

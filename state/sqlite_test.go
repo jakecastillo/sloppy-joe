@@ -34,17 +34,11 @@ func TestSQLiteIdempotencyAndAuditPersist(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	if applied, _ := s.IsIntentApplied(ctx, "int-1"); applied {
-		t.Fatal("int-1 should be new")
+	if claimed, err := s.ClaimIntent(ctx, "int-1"); err != nil || !claimed {
+		t.Fatalf("first claim of int-1 must win: claimed=%v err=%v", claimed, err)
 	}
-	if err := s.MarkIntentApplied(ctx, "int-1"); err != nil {
-		t.Fatalf("mark: %v", err)
-	}
-	if applied, _ := s.IsIntentApplied(ctx, "int-1"); !applied {
-		t.Fatal("int-1 should be applied after mark")
-	}
-	if err := s.MarkIntentApplied(ctx, "int-1"); err != nil {
-		t.Fatalf("re-mark must be idempotent: %v", err)
+	if claimed, err := s.ClaimIntent(ctx, "int-1"); err != nil || claimed {
+		t.Fatalf("re-claim of int-1 must lose without error: claimed=%v err=%v", claimed, err)
 	}
 
 	if _, err := s.AppendAudit(ctx, "intent.applied", "reroute acme"); err != nil {

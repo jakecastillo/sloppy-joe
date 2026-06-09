@@ -101,38 +101,66 @@ func TestMarkRevertedFailureSurfaced(t *testing.T) {
 	}
 }
 
-// A store whose MarkIntentApplied fails (after the actuator call) must surface
-// the lost idempotency write — at-most-once degrades to at-least-once on a crash
-// here, but it must never be silent.
-type markApplyFailStore struct {
+// A store whose ReleaseIntent fails AFTER the actuator errors must surface the
+// stuck-claimed id (at-most-once is preserved, but the intent won't auto-retry
+// until its retention lapses — never silently).
+type releaseFailStore struct {
 	state.Store
 }
 
-func (markApplyFailStore) MarkIntentApplied(context.Context, string) error { return errBoom }
+func (releaseFailStore) ReleaseIntent(context.Context, string) error { return errBoom }
 
-func TestMarkAppliedFailureSurfaced(t *testing.T) {
+func TestClaimReleaseFailureSurfaced(t *testing.T) {
 	now := time.Unix(1749340800, 0).UTC()
 	rs, _ := rules.ParseRules([]byte(ttlRule))
 	rec, _ := rules.NewReconciler(rs)
-	inner, _ := state.OpenSQLite(t.TempDir() + "/ma.db")
+	inner, _ := state.OpenSQLite(t.TempDir() + "/rf.db")
 	defer inner.Close()
-	st := markApplyFailStore{Store: inner}
+	st := releaseFailStore{Store: inner}
 	reg := actuator.NewRegistry()
-	f := &actuator.Fake{}
+	f := &actuator.Fake{ApplyErr: errBoom} // actuation fails → engine tries to release the claim
 	reg.Register(f)
 	m := metrics.New()
 	signer, _ := intent.NewEd25519Signer()
 	e := New(rec, reg, st, signer, WithMetrics(m), WithClock(func() time.Time { return now }))
 
 	res, _ := e.Handle(context.Background(), burnSig())
-	if countApplied(res) != 1 || f.Applied != 1 {
-		t.Fatalf("actuator should apply exactly once (applied=%d)", f.Applied)
+	if len(res) != 1 || res[0].Outcome != OutFailed {
+		t.Fatalf("apply failure should yield OutFailed, got %+v", res)
 	}
-	if m.Snapshot()["state_write_failed"] != 1 {
-		t.Fatalf("state_write_failed metric must fire, got %d", m.Snapshot()["state_write_failed"])
+	if m.Snapshot()["claim_release_failed"] != 1 {
+		t.Fatalf("claim_release_failed metric must fire, got %d", m.Snapshot()["claim_release_failed"])
 	}
-	if !auditHas(t, inner, "intent.mark_failed") {
-		t.Fatal("expected intent.mark_failed audit entry")
+	if !auditHas(t, inner, "intent.claim_release_failed") {
+		t.Fatal("expected intent.claim_release_failed audit entry")
+	}
+}
+
+// When actuation fails, the engine must RELEASE the idempotency claim so a
+// later retry of the same signal re-attempts the intent (claim is a gate, not a
+// tombstone). With a real store, the first apply fails; once the actuator
+// recovers, a replay must actuate exactly once.
+func TestFailedApplyReleasesClaimForRetry(t *testing.T) {
+	now := time.Unix(1749340800, 0).UTC()
+	rs, _ := rules.ParseRules([]byte(ttlRule))
+	rec, _ := rules.NewReconciler(rs)
+	st, _ := state.OpenSQLite(t.TempDir() + "/rr.db")
+	defer st.Close()
+	reg := actuator.NewRegistry()
+	f := &actuator.Fake{ApplyErr: errBoom}
+	reg.Register(f)
+	signer, _ := intent.NewEd25519Signer()
+	e := New(rec, reg, st, signer, WithClock(func() time.Time { return now }))
+
+	// First attempt: actuator fails → OutFailed, claim released.
+	if res, _ := e.Handle(context.Background(), burnSig()); res[0].Outcome != OutFailed {
+		t.Fatalf("first attempt should fail, got %+v", res)
+	}
+	// Actuator recovers; the SAME signal replays and must actuate (not skip).
+	f.ApplyErr = nil
+	res, _ := e.Handle(context.Background(), burnSig())
+	if countApplied(res) != 1 || f.Applied != 2 {
+		t.Fatalf("retry after recovery must actuate once more, applied=%d fake=%d", countApplied(res), f.Applied)
 	}
 }
 

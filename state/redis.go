@@ -36,14 +36,21 @@ func OpenRedis(addr string) (Store, error) {
 	return &redisStore{c: c}, nil
 }
 
-// Idempotency keys are stored per-id with a TTL so the set can't grow forever.
-func (s *redisStore) IsIntentApplied(ctx context.Context, id string) (bool, error) {
-	n, err := s.c.Exists(ctx, "sloppy:applied:"+id).Result()
-	return n > 0, err
+// ClaimIntent uses SET ... NX as the atomic at-most-once gate: the first caller
+// for an id sets the key (claimed=true); concurrent callers across replicas get
+// a no-op (claimed=false) because NX only writes when the key is absent. The key
+// carries a TTL so the idempotency set can't grow forever.
+func (s *redisStore) ClaimIntent(ctx context.Context, id string) (bool, error) {
+	ok, err := s.c.SetNX(ctx, "sloppy:applied:"+id, 1, appliedRetention).Result()
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
 }
 
-func (s *redisStore) MarkIntentApplied(ctx context.Context, id string) error {
-	return s.c.Set(ctx, "sloppy:applied:"+id, 1, appliedRetention).Err()
+// ReleaseIntent deletes the idempotency key so a failed actuation can be retried.
+func (s *redisStore) ReleaseIntent(ctx context.Context, id string) error {
+	return s.c.Del(ctx, "sloppy:applied:"+id).Err()
 }
 
 type auditRec struct {

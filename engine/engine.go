@@ -274,30 +274,49 @@ func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now
 		e.met.Inc("intents_dry_run")
 		return Result{Intent: in, Outcome: OutDryRun}
 	}
-	done, err := e.store.IsIntentApplied(ctx, in.ID)
+	// Atomically claim the idempotency key BEFORE actuating. This is the gate
+	// that closes the apply-twice TOCTOU: two identical signals racing through
+	// Handle (one goroutine per ingest request) both reach here, but only the
+	// caller whose conditional store-write created the key proceeds to Apply; the
+	// loser skips. The old read-then-write (IsIntentApplied -> Apply -> Mark) had
+	// a window where both readers saw "not applied" and both actuated.
+	claimed, err := e.store.ClaimIntent(ctx, in.ID)
 	if err != nil {
 		if e.failMode == FailClosed {
 			_, _ = e.store.AppendAudit(ctx, "intent.fail_closed", auditDetail(in))
 			e.met.Inc("intents_failed")
 			return Result{Intent: in, Outcome: OutFailed, Err: "state unavailable (fail-closed)"}
 		}
-		done = false // fail-open: proceed as if not applied
+		// Fail-open: the claim is unreadable but we favour availability and
+		// proceed to actuate. This degrades at-most-once to at-least-once, so a
+		// retried signal may double-actuate; actuators are expected to be
+		// idempotent on intent ID. Surface it so the degradation is never silent.
+		e.met.Inc("claim_check_failed")
+		_, _ = e.store.AppendAudit(ctx, "intent.claim_check_failed", auditDetail(in)+fmt.Sprintf(" err=%v", err))
+		e.log.Warn("idempotency claim unreadable; proceeding (fail-open, at-least-once)", "intent", in.ID, "err", err)
+		claimed = true // proceed as the winner
 	}
-	if done {
+	if !claimed {
+		// Another caller already claimed this intent ID — skip to keep at-most-once.
 		e.met.Inc("intents_skipped")
 		return Result{Intent: in, Outcome: OutSkipped}
 	}
 	rcpt, err := e.reg.Apply(ctx, in)
 	if err != nil {
+		// Actuation failed: release the claim so a later retry of this signal can
+		// re-attempt it (the claim is a gate, not a tombstone). Without this, a
+		// transient actuator error would permanently mark the id "done" and every
+		// retry would skip. If the release itself fails, surface it — the id is
+		// stuck-claimed and won't retry until its TTL/retention lapses.
+		if relErr := e.store.ReleaseIntent(ctx, in.ID); relErr != nil {
+			e.met.Inc("claim_release_failed")
+			_, _ = e.store.AppendAudit(ctx, "intent.claim_release_failed", auditDetail(in)+fmt.Sprintf(" err=%v", relErr))
+			e.log.Warn("failed to release idempotency claim after apply failure", "intent", in.ID, "err", relErr)
+		}
 		_, _ = e.store.AppendAudit(ctx, "intent.failed", fmt.Sprintf("%s err=%v", auditDetail(in), err))
 		e.met.Inc("intents_failed")
 		e.log.Warn("intent failed", "intent", in.ID, "kind", string(in.Kind), "target", in.Target, "err", err)
 		return Result{Intent: in, Outcome: OutFailed, Err: err.Error()}
-	}
-	if err := e.store.MarkIntentApplied(ctx, in.ID); err != nil {
-		// A lost idempotency record silently breaks at-most-once — surface it.
-		e.met.Inc("state_write_failed")
-		_, _ = e.store.AppendAudit(ctx, "intent.mark_failed", auditDetail(in)+fmt.Sprintf(" err=%v", err))
 	}
 	// Persist the FULL signature + signed canonical bytes so the signature is
 	// independently verifiable later via `sloppy audit --verify-sigs`.
