@@ -8,7 +8,7 @@ import "github.com/sloppyjoe/sloppy/core"
 // surface is Kubernetes CRD / xDS; this targets a provisional admin endpoint and
 // should be replaced by a CRD/xDS driver before real use.
 func NewEnvoy(baseURL string, token TokenFunc) Actuator {
-	return newHTTPRoute("envoy", baseURL, token, func(i core.RemediationIntent, isRevert bool) (string, map[string]any) {
+	return newHTTPRoute("envoy", baseURL, token, []core.ActionKind{core.ActionRouteOverride}, func(i core.RemediationIntent, isRevert bool) (string, map[string]any) {
 		return "/admin/routes/override", map[string]any{"model": i.Target, "to": routeDest(i, isRevert)}
 	})
 }

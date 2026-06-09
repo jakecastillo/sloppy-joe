@@ -58,7 +58,7 @@ type Fake struct {
 }
 
 func (f *Fake) Capabilities() []core.ActionKind {
-	return []core.ActionKind{core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage}
+	return []core.ActionKind{core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage, core.ActionThrottleTenant, core.ActionDisableDeployment}
 }
 func (f *Fake) Apply(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	f.Applied++
@@ -80,7 +80,7 @@ func (f *Fake) Revert(_ context.Context, i core.RemediationIntent) (core.Receipt
 type Log struct{ W io.Writer }
 
 func (l *Log) Capabilities() []core.ActionKind {
-	return []core.ActionKind{core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage}
+	return []core.ActionKind{core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage, core.ActionThrottleTenant, core.ActionDisableDeployment}
 }
 func (l *Log) Apply(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	fmt.Fprintf(l.W, "  → %s target=%s args=%v\n", i.Kind, i.Target, i.Args)

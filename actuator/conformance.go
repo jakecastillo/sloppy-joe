@@ -19,24 +19,25 @@ func Conformance(tb testing.TB, a Actuator, sample core.RemediationIntent) {
 	if len(caps) == 0 {
 		tb.Fatalf("conformance: Capabilities() must be non-empty")
 	}
-	sample.Kind = caps[0]
-
-	rc, err := a.Apply(context.Background(), sample)
-	if err != nil {
-		tb.Fatalf("conformance: Apply error: %v", err)
-	}
-	if rc.Outcome != core.OutcomeApplied {
-		tb.Fatalf("conformance: Apply must yield OutcomeApplied, got %q", rc.Outcome)
-	}
-	if rc.IntentID != sample.ID {
-		tb.Fatalf("conformance: receipt IntentID %q != intent ID %q", rc.IntentID, sample.ID)
-	}
-
-	rv, err := a.Revert(context.Background(), sample)
-	if err != nil {
-		tb.Fatalf("conformance: Revert error: %v", err)
-	}
-	if rv.Outcome != core.OutcomeReverted {
-		tb.Fatalf("conformance: Revert must yield OutcomeReverted, got %q", rv.Outcome)
+	for _, k := range caps {
+		s := sample
+		s.Kind = k
+		rc, err := a.Apply(context.Background(), s)
+		if err != nil {
+			tb.Fatalf("conformance[%s]: Apply error: %v", k, err)
+		}
+		if rc.Outcome != core.OutcomeApplied {
+			tb.Fatalf("conformance[%s]: Apply must yield OutcomeApplied, got %q", k, rc.Outcome)
+		}
+		if rc.IntentID != s.ID {
+			tb.Fatalf("conformance[%s]: receipt IntentID %q != intent ID %q", k, rc.IntentID, s.ID)
+		}
+		rv, err := a.Revert(context.Background(), s)
+		if err != nil {
+			tb.Fatalf("conformance[%s]: Revert error: %v", k, err)
+		}
+		if rv.Outcome != core.OutcomeReverted {
+			tb.Fatalf("conformance[%s]: Revert must yield OutcomeReverted, got %q", k, rv.Outcome)
+		}
 	}
 }
