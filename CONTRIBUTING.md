@@ -46,3 +46,22 @@ Significant changes should start from a short spec there.
 ## Commits
 
 Conventional-commit style (`feat:`, `fix:`, `refactor:`, `docs:`, `ci:`). Small, focused commits.
+**Sign off every commit** for the DCO (`git commit -s`) — see below.
+
+## License & the DCO
+
+Sloppy Joe is licensed under the [Apache License 2.0](LICENSE). Contributions are
+accepted under that same license: by contributing, you agree your contribution is
+licensed under Apache-2.0 (its §5 inbound = outbound grant).
+
+We certify provenance with the [Developer Certificate of Origin](.github/DCO)
+rather than a CLA. Add a `Signed-off-by` line to every commit by committing with `-s`:
+
+```bash
+git commit -s -m "feat: add a thing"
+# appends: Signed-off-by: Your Name <you@example.com>
+```
+
+The name and email must be your real identity and match your Git config. On your
+first contribution, add yourself to `AUTHORS`. Sign-off can be enforced by a DCO
+check on pull requests.

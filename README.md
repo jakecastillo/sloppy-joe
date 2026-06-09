@@ -158,7 +158,11 @@ curl localhost:8723/status
 
 ## License
 
-Intended: **Apache-2.0** (permissive, with a patent grant). `LICENSE` to be added at design lock.
+Sloppy Joe is licensed under the **[Apache License 2.0](LICENSE)** — permissive,
+with an explicit patent grant (the trust standard for control-plane / infra
+projects). Contributions are accepted under the same license via a
+[Developer Certificate of Origin](.github/DCO) sign-off (`git commit -s`); see
+[CONTRIBUTING](CONTRIBUTING.md). Copyright © The Sloppy Joe Authors.
 
 ---
 
