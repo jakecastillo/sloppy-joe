@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"strings"
 	"time"
 
 	"github.com/sloppyjoe/sloppy/core"
@@ -78,6 +79,29 @@ func (rc *Reconciler) Cleared(sig core.Signal, state map[string]any) []Rule {
 		}
 	}
 	return out
+}
+
+// StateDependentRules returns the rules of the given signal type whose `when`
+// condition references ledger-derived `state.*` (e.g. cost-runaway guards). The
+// engine uses this to avoid silently non-matching such rules when the state read
+// fails: an unreadable `state.spend_1h_usd` must be treated as inconclusive, not
+// as a clean below-threshold non-match. A signal-only rule (no `state.` ref) is
+// unaffected by a state-store blip and is excluded.
+func (rc *Reconciler) StateDependentRules(sigType string) []Rule {
+	var out []Rule
+	for _, cr := range rc.rules {
+		if cr.rule.On == sigType && referencesState(cr.rule.When) {
+			out = append(out, cr.rule)
+		}
+	}
+	return out
+}
+
+// referencesState reports whether a CEL `when` expression reads the `state.*`
+// namespace. Conditions are flat boolean expressions over {signal, state}; a
+// substring match on the `state.` selector is sufficient and avoids re-parsing.
+func referencesState(when string) bool {
+	return strings.Contains(when, "state.")
 }
 
 func actionToIntent(a Action, r Rule, sig core.Signal) core.RemediationIntent {

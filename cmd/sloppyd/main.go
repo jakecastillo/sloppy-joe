@@ -38,11 +38,7 @@ func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.Cos
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				now := time.Now().UTC()
-				if n, err := e.ProcessDueReverts(ctx, now); err == nil && n > 0 {
-					logger.Info("reverted expired intents", "count", n)
-				}
-				_ = e.PruneUsage(ctx, now.Add(-48*time.Hour))
+				runRevertScan(ctx, e, m, logger, time.Now().UTC())
 			}
 		}
 	}()
@@ -59,6 +55,25 @@ func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.Cos
 		return err
 	}
 	return nil
+}
+
+// runRevertScan performs one tick of the TTL auto-revert safety net: it processes
+// due reverts and prunes stale usage. Both are best-effort against the store, but
+// neither error may be swallowed silently — a store outage that disables the
+// safety net must be observable, so each failure logs a Warn and bumps
+// revert_scan_failed. Extracted from the ticker loop so the failure paths are
+// unit-testable.
+func runRevertScan(ctx context.Context, e *engine.Engine, m *metrics.Registry, logger *slog.Logger, now time.Time) {
+	if n, err := e.ProcessDueReverts(ctx, now); err != nil {
+		m.Inc("revert_scan_failed")
+		logger.Warn("process due reverts failed", "err", err)
+	} else if n > 0 {
+		logger.Info("reverted expired intents", "count", n)
+	}
+	if err := e.PruneUsage(ctx, now.Add(-48*time.Hour)); err != nil {
+		m.Inc("revert_scan_failed")
+		logger.Warn("prune usage failed", "err", err)
+	}
 }
 
 func main() {

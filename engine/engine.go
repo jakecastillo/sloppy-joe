@@ -115,11 +115,41 @@ func (e *Engine) Handle(ctx context.Context, sig core.Signal) ([]Result, error) 
 	e.met.Inc("signals_handled")
 	now := e.now()
 	var st map[string]any
-	if e.led != nil {
-		st, _ = e.led.StateFor(ctx, sig.Subject.Tenant, now)
-	}
 	var results []Result
+	// inconclusive holds rule SHAs whose state.* guard couldn't be evaluated
+	// (state unavailable under fail-closed); they must be skipped in the match
+	// loop rather than allowed to non-match against an empty state map.
+	var inconclusive map[string]bool
+	if e.led != nil {
+		var err error
+		if st, err = e.led.StateFor(ctx, sig.Subject.Tenant, now); err != nil {
+			// The cost ledger feeds state.* CEL guards (the cost-runaway brakes).
+			// A dropped read mustn't silently make those guards never fire.
+			st = nil
+			e.met.Inc("state_unavailable")
+			e.log.Warn("state unavailable", "tenant", sig.Subject.Tenant, "err", err)
+			if e.failMode == FailClosed {
+				// Inconclusive, not a clean non-match: surface every state.*
+				// rule of this type so an operator sees the guard couldn't run.
+				inconclusive = map[string]bool{}
+				for _, r := range e.rec.StateDependentRules(sig.Type) {
+					inconclusive[r.SHA] = true
+					_, _ = e.store.AppendAudit(ctx, "state.fail_closed", "rule="+r.SHA+" (state unavailable)")
+					results = append(results, Result{
+						Intent:  core.RemediationIntent{RuleSHA: r.SHA},
+						Outcome: OutFailed,
+						Err:     "state unavailable (fail-closed)",
+					})
+				}
+			}
+			// st stays nil: signal-only rules still evaluate against an empty
+			// state map (fail-open behaviour for non-state guards is unchanged).
+		}
+	}
 	for _, m := range e.rec.EvaluateMatches(sig, st) {
+		if inconclusive[m.Rule.SHA] {
+			continue // already surfaced as inconclusive above
+		}
 		if m.Rule.For > 0 && !e.immediate && !e.forWindowSatisfied(m.Rule.SHA, sig.CorrelationKey, m.Rule.For, now) {
 			results = append(results, Result{Intent: core.RemediationIntent{RuleSHA: m.Rule.SHA}, Outcome: OutPending})
 			continue
@@ -160,14 +190,33 @@ func (e *Engine) throttled(ctx context.Context, r rules.Rule, now time.Time) boo
 	if err != nil || count == 0 {
 		return false // unset / unlimited
 	}
-	used, _ := e.store.CountActions(ctx, r.SHA, now.Add(-window))
+	used, err := e.store.CountActions(ctx, r.SHA, now.Add(-window))
+	if err != nil {
+		// A dropped budget read must not silently disable intent_budget
+		// enforcement: make it observable, and under fail-closed treat an
+		// unreadable budget as exhausted (deny) rather than waved through.
+		e.met.Inc("budget_check_failed")
+		_, _ = e.store.AppendAudit(ctx, "intent.budget_check_failed", fmt.Sprintf("rule=%s budget=%s err=%v", r.SHA, r.With.IntentBudget, err))
+		if e.failMode == FailClosed {
+			e.log.Warn("budget unreadable; denying (fail-closed)", "rule", r.SHA, "budget", r.With.IntentBudget, "err", err)
+			return true
+		}
+		e.log.Warn("budget unreadable; allowing (fail-open)", "rule", r.SHA, "budget", r.With.IntentBudget, "err", err)
+		return false
+	}
 	if used >= count {
 		_, _ = e.store.AppendAudit(ctx, "intent.throttled", fmt.Sprintf("rule=%s budget=%s used=%d", r.SHA, r.With.IntentBudget, used))
 		e.met.Inc("intents_throttled")
 		e.log.Warn("rule throttled", "rule", r.SHA, "budget", r.With.IntentBudget)
 		return true
 	}
-	_ = e.store.RecordAction(ctx, r.SHA, now)
+	if err := e.store.RecordAction(ctx, r.SHA, now); err != nil {
+		// The firing proceeds, but a lost budget write under-counts future
+		// windows; surface it so enforcement drift is never silent.
+		e.met.Inc("budget_record_failed")
+		_, _ = e.store.AppendAudit(ctx, "intent.budget_record_failed", fmt.Sprintf("rule=%s budget=%s err=%v", r.SHA, r.With.IntentBudget, err))
+		e.log.Warn("budget firing not recorded", "rule", r.SHA, "budget", r.With.IntentBudget, "err", err)
+	}
 	return false
 }
 

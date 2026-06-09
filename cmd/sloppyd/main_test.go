@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -12,10 +13,115 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sloppyjoe/sloppy/actuator"
 	"github.com/sloppyjoe/sloppy/bootstrap"
 	"github.com/sloppyjoe/sloppy/config"
+	"github.com/sloppyjoe/sloppy/core"
 	"github.com/sloppyjoe/sloppy/ee"
+	"github.com/sloppyjoe/sloppy/engine"
+	"github.com/sloppyjoe/sloppy/intent"
+	"github.com/sloppyjoe/sloppy/metrics"
+	"github.com/sloppyjoe/sloppy/rules"
+	"github.com/sloppyjoe/sloppy/state"
 )
+
+// scanFailStore satisfies state.Store via a real backend but fails the two scan
+// reads the ticker drives — DueReverts (ProcessDueReverts) and PruneUsage — to
+// simulate a store blip during the background revert scan.
+type scanFailStore struct {
+	state.Store
+}
+
+func (scanFailStore) DueReverts(context.Context, time.Time) ([]state.PendingRevert, error) {
+	return nil, errScan
+}
+func (scanFailStore) PruneUsage(context.Context, time.Time) error { return errScan }
+
+var errScan = errScanError("store unavailable")
+
+type errScanError string
+
+func (e errScanError) Error() string { return string(e) }
+
+// The revert ticker must not silently swallow scan errors: a failed
+// ProcessDueReverts and a failed PruneUsage each log a Warn and bump
+// revert_scan_failed, so a store outage during the safety-net scan is visible.
+func TestRevertScanErrorsLoggedAndCounted(t *testing.T) {
+	inner, err := state.OpenSQLite(t.TempDir() + "/scan.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inner.Close()
+	st := scanFailStore{Store: inner}
+
+	rs, _ := rules.ParseRules([]byte(`
+on: cost.budget_burn
+when: signal.data.spend_1h_usd > 5.0
+then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
+`))
+	rec, _ := rules.NewReconciler(rs)
+	reg := actuator.NewRegistry()
+	reg.Register(&actuator.Fake{})
+	signer, _ := intent.NewEd25519Signer()
+	m := metrics.New()
+	e := engine.New(rec, reg, st, signer, engine.WithMetrics(m))
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	runRevertScan(context.Background(), e, m, logger, time.Unix(1749340800, 0).UTC())
+
+	out := buf.String()
+	if !strings.Contains(out, "process due reverts") {
+		t.Fatalf("expected a Warn log for the ProcessDueReverts error, got: %q", out)
+	}
+	if !strings.Contains(out, "prune usage") {
+		t.Fatalf("expected a Warn log for the PruneUsage error, got: %q", out)
+	}
+	if m.Snapshot()["revert_scan_failed"] != 2 {
+		t.Fatalf("revert_scan_failed must count both scan failures, got %d", m.Snapshot()["revert_scan_failed"])
+	}
+}
+
+// A clean scan with work done logs the revert count and bumps nothing failure-side.
+func TestRevertScanSuccessLogsCount(t *testing.T) {
+	base := time.Unix(1749340800, 0).UTC()
+	inner, err := state.OpenSQLite(t.TempDir() + "/ok.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inner.Close()
+
+	rs, _ := rules.ParseRules([]byte(`
+on: cost.budget_burn
+when: signal.data.spend_1h_usd > 5.0
+then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]
+`))
+	rec, _ := rules.NewReconciler(rs)
+	reg := actuator.NewRegistry()
+	reg.Register(&actuator.Fake{})
+	signer, _ := intent.NewEd25519Signer()
+	m := metrics.New()
+	e := engine.New(rec, reg, inner, signer, engine.WithMetrics(m),
+		engine.WithClock(func() time.Time { return base }))
+
+	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	if _, err := e.Handle(context.Background(), sig); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	runRevertScan(context.Background(), e, m, logger, base.Add(31*time.Minute))
+
+	if !strings.Contains(buf.String(), "reverted expired intents") {
+		t.Fatalf("expected reverted-count log, got: %q", buf.String())
+	}
+	if m.Snapshot()["revert_scan_failed"] != 0 {
+		t.Fatalf("clean scan must not bump revert_scan_failed, got %d", m.Snapshot()["revert_scan_failed"])
+	}
+}
 
 func TestServeHealthSignalAndStatus(t *testing.T) {
 	dir := t.TempDir()
