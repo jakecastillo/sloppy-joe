@@ -13,7 +13,7 @@ checks it off, advances; stops when NOW is clear.
 
 ## NOW (this loop)
 
-- [ ] **Plan 15 — Real LiteLLM admin body + per-gateway actuator split.** Today
+- [x] **Plan 15 — Real LiteLLM admin body + per-gateway actuator split.** Today
   `litellm`/`bifrost`/`envoy` share one `httpRouteActuator` body (`{model,to}`) that
   would 422 against real LiteLLM. Split so each gateway owns its request shape; give
   LiteLLM its documented `/model/update` schema (`model_name` + `litellm_params{model}`
