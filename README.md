@@ -33,7 +33,9 @@ $ sloppyd --rules examples/rules
 
 ## Status
 
-✅ **v0 implemented (Plans 1–4).** Library (`libsloppyjoe`) + `sloppy` CLI + `sloppyd` daemon. `go test ./...` green across all packages; static `CGO_ENABLED=0` binaries. Design + plans live under [`docs/superpowers/`](docs/superpowers/). A **Phase-0 demand-validation** with design partners runs in parallel (see [`docs/vision.md`](docs/vision.md)).
+✅ **v0 implemented (Plans 1–4).** An importable Go library[^lib] + the `sloppy` CLI + the `sloppyd` daemon. `go test ./...` green across all packages; static `CGO_ENABLED=0` binaries. Design + plans live under [`docs/superpowers/`](docs/superpowers/). A **Phase-0 demand-validation** with design partners runs in parallel (see [`docs/vision.md`](docs/vision.md)).
+
+[^lib]: The importable core is the module `github.com/sloppyjoe/sloppy` (everything outside `cmd/`); import it as `sloppyjoe "github.com/sloppyjoe/sloppy"`. The `libsloppyjoe` name in the early design doc was never published as a separate artifact.
 
 ## Architecture
 

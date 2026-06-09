@@ -18,9 +18,21 @@ const (
 	ActionDisableDeployment ActionKind = "disable_deployment"
 )
 
-// KnownActionKinds returns every defined action kind.
+// KnownActionKinds returns every defined action kind. It is the single source of
+// truth for which kinds rule validation accepts (see rules.Validate), so a new
+// ActionKind constant becomes governable simply by appearing here.
 func KnownActionKinds() []ActionKind {
 	return []ActionKind{ActionRouteOverride, ActionOpenIssue, ActionPage, ActionThrottleTenant, ActionDisableDeployment}
+}
+
+// IsKnownActionKind reports whether k is one of the defined action kinds.
+func IsKnownActionKind(k ActionKind) bool {
+	for _, known := range KnownActionKinds() {
+		if k == known {
+			return true
+		}
+	}
+	return false
 }
 
 // RemediationIntent is a signed, reversible request to change the world.

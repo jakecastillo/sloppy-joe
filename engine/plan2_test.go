@@ -13,7 +13,11 @@ import (
 	"github.com/sloppyjoe/sloppy/state"
 )
 
-func mustEngine(t *testing.T, ruleYAML string, opts ...Option) (*Engine, *actuator.Fake, state.Store) {
+// mustEngine is the single shared engine test builder: it compiles ruleYAML,
+// opens a fresh SQLite store, registers a Fake actuator, and wires an engine with
+// the given options. It returns the signer too so signature-verification tests can
+// check what the engine produced.
+func mustEngine(t *testing.T, ruleYAML string, opts ...Option) (*Engine, *actuator.Fake, state.Store, intent.Signer) {
 	t.Helper()
 	rs, err := rules.ParseRules([]byte(ruleYAML))
 	if err != nil {
@@ -31,14 +35,14 @@ func mustEngine(t *testing.T, ruleYAML string, opts ...Option) (*Engine, *actuat
 	f := &actuator.Fake{}
 	reg.Register(f)
 	signer, _ := intent.NewEd25519Signer()
-	return New(rec, reg, st, signer, opts...), f, st
+	return New(rec, reg, st, signer, opts...), f, st, signer
 }
 
 func TestForWindowGating(t *testing.T) {
 	base := time.Unix(1749340800, 0).UTC()
 	now := base
 	clock := func() time.Time { return now }
-	e, f, st := mustEngine(t, `
+	e, f, st, _ := mustEngine(t, `
 on: cost.budget_burn
 when: signal.data.spend_1h_usd > 5.0
 for: 1m
@@ -82,7 +86,7 @@ func TestLedgerDrivesState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	e, f, st := mustEngine(t, `
+	e, f, st, _ := mustEngine(t, `
 on: cost.budget_burn
 when: state.spend_1h_usd > 10.0
 then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
@@ -100,7 +104,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 func TestTTLRevertScheduledAndProcessed(t *testing.T) {
 	base := time.Unix(1749340800, 0).UTC()
 	now := base
-	e, f, st := mustEngine(t, `
+	e, f, st, _ := mustEngine(t, `
 on: cost.budget_burn
 when: signal.data.spend_1h_usd > 5.0
 then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]

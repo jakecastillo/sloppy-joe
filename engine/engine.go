@@ -167,7 +167,7 @@ func (e *Engine) Handle(ctx context.Context, sig core.Signal) ([]Result, error) 
 			}
 		}
 		if m.Rule.With.Rollback == "on_clear" && len(applied) > 0 {
-			key := m.Rule.SHA + "|" + sig.CorrelationKey
+			key := dedupKey(m.Rule.SHA, sig.CorrelationKey)
 			for _, in := range applied {
 				args, _ := json.Marshal(in.Args)
 				_ = e.store.RecordOutstanding(ctx, key, state.PendingRevert{
@@ -222,18 +222,13 @@ func (e *Engine) throttled(ctx context.Context, r rules.Rule, now time.Time) boo
 
 // rollbackOnClear reverts and clears a rule's outstanding on-clear intents.
 func (e *Engine) rollbackOnClear(ctx context.Context, r rules.Rule, corr string) {
-	key := r.SHA + "|" + corr
+	key := dedupKey(r.SHA, corr)
 	outs, _ := e.store.Outstanding(ctx, key)
 	if len(outs) == 0 {
 		return
 	}
 	for _, pr := range outs {
-		var args map[string]any
-		if pr.ArgsJSON != "" {
-			_ = json.Unmarshal([]byte(pr.ArgsJSON), &args)
-		}
-		in := core.RemediationIntent{ID: pr.IntentID, Kind: core.ActionKind(pr.Kind), Target: pr.Target, Args: args}
-		if _, err := e.reg.Revert(ctx, in); err != nil {
+		if err := e.revertPending(ctx, pr); err != nil {
 			_, _ = e.store.AppendAudit(ctx, "intent.rollback_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
 			continue
 		}
@@ -245,7 +240,7 @@ func (e *Engine) rollbackOnClear(ctx context.Context, r rules.Rule, corr string)
 }
 
 func (e *Engine) forWindowSatisfied(ruleSHA, corr string, dur time.Duration, now time.Time) bool {
-	key := ruleSHA + "|" + corr
+	key := dedupKey(ruleSHA, corr)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// Opportunistically expire stale windows so a one-shot spike that never
@@ -347,12 +342,7 @@ func (e *Engine) ProcessDueReverts(ctx context.Context, now time.Time) (int, err
 	}
 	n := 0
 	for _, pr := range due {
-		var args map[string]any
-		if pr.ArgsJSON != "" {
-			_ = json.Unmarshal([]byte(pr.ArgsJSON), &args)
-		}
-		in := core.RemediationIntent{ID: pr.IntentID, Kind: core.ActionKind(pr.Kind), Target: pr.Target, Args: args}
-		if _, err := e.reg.Revert(ctx, in); err != nil {
+		if err := e.revertPending(ctx, pr); err != nil {
 			_, _ = e.store.AppendAudit(ctx, "intent.revert_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
 			continue // leave it pending so the next tick retries
 		}
@@ -377,4 +367,26 @@ func (e *Engine) PruneUsage(ctx context.Context, before time.Time) error {
 
 func auditDetail(i core.RemediationIntent) string {
 	return fmt.Sprintf("%s target=%s rule=%s", i.Kind, i.Target, i.RuleSHA)
+}
+
+// dedupKey is the per-(rule, correlation) key used to scope a rule's `for:`
+// window, its on-clear outstanding set, and its rollback lookup. It is the single
+// definition all three sites share so they can never disagree on the encoding.
+func dedupKey(ruleSHA, corr string) string {
+	return ruleSHA + "|" + corr
+}
+
+// revertPending rebuilds the RemediationIntent recorded in a PendingRevert and
+// asks the registry to revert it. It is the shared glue for both revert loops
+// (rollback-on-clear and the TTL auto-revert ticker); each CALLER keeps its own
+// distinct audit strings, success accounting, and post-revert bookkeeping
+// (MarkReverted / ClearOutstanding) around this call.
+func (e *Engine) revertPending(ctx context.Context, pr state.PendingRevert) error {
+	var args map[string]any
+	if pr.ArgsJSON != "" {
+		_ = json.Unmarshal([]byte(pr.ArgsJSON), &args)
+	}
+	in := core.RemediationIntent{ID: pr.IntentID, Kind: core.ActionKind(pr.Kind), Target: pr.Target, Args: args}
+	_, err := e.reg.Revert(ctx, in)
+	return err
 }

@@ -168,7 +168,7 @@ func TestFailedApplyReleasesClaimForRetry(t *testing.T) {
 func TestPendingWindowDoesNotLeak(t *testing.T) {
 	base := time.Unix(1749340800, 0).UTC()
 	now := base
-	e, _, st := mustEngine(t, `
+	e, _, st, _ := mustEngine(t, `
 on: cost.budget_burn
 when: signal.data.spend_1h_usd > 5.0
 for: 1m

@@ -69,3 +69,33 @@ func TestStateForExposesSpendFields(t *testing.T) {
 		t.Fatal("spend_24h_usd missing")
 	}
 }
+
+// TestStateKeyContract pins the exported state-key consts to the exact CEL field
+// names rule authors write (`state.spend_1h_usd`, `state.spend_24h_usd`). The
+// consts are the producer<->consumer contract, so their string values must never
+// drift from the literals or every state.* guard would silently stop matching.
+func TestStateKeyContract(t *testing.T) {
+	if StateKeySpend1h != "spend_1h_usd" {
+		t.Fatalf("StateKeySpend1h = %q, want spend_1h_usd", StateKeySpend1h)
+	}
+	if StateKeySpend24h != "spend_24h_usd" {
+		t.Fatalf("StateKeySpend24h = %q, want spend_24h_usd", StateKeySpend24h)
+	}
+
+	st, err := state.OpenSQLite(t.TempDir() + "/lk.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	l := New(PriceBook{}, st)
+	s, err := l.StateFor(context.Background(), "acme", time.Unix(1749340800, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s[StateKeySpend1h]; !ok {
+		t.Fatalf("StateFor missing %q key", StateKeySpend1h)
+	}
+	if _, ok := s[StateKeySpend24h]; !ok {
+		t.Fatalf("StateFor missing %q key", StateKeySpend24h)
+	}
+}

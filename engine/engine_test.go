@@ -4,11 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sloppyjoe/sloppy/actuator"
 	"github.com/sloppyjoe/sloppy/core"
 	"github.com/sloppyjoe/sloppy/intent"
-	"github.com/sloppyjoe/sloppy/rules"
-	"github.com/sloppyjoe/sloppy/state"
 )
 
 const rule = `
@@ -18,27 +15,6 @@ then:
   - route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m }
 with: { dry_run: false }
 `
-
-func build(t *testing.T, ruleYAML string) (*Engine, *actuator.Fake, state.Store, intent.Signer) {
-	t.Helper()
-	rs, err := rules.ParseRules([]byte(ruleYAML))
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec, err := rules.NewReconciler(rs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	st, err := state.OpenSQLite(t.TempDir() + "/e.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	reg := actuator.NewRegistry()
-	f := &actuator.Fake{}
-	reg.Register(f)
-	s, _ := intent.NewEd25519Signer()
-	return New(rec, reg, st, s), f, st, s
-}
 
 func countApplied(rs []Result) int {
 	n := 0
@@ -51,7 +27,7 @@ func countApplied(rs []Result) int {
 }
 
 func TestEngineClosesLoopSignsAndIsIdempotent(t *testing.T) {
-	e, f, st, signer := build(t, rule)
+	e, f, st, signer := mustEngine(t, rule)
 	defer st.Close()
 	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
 		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
@@ -81,7 +57,7 @@ func TestEngineClosesLoopSignsAndIsIdempotent(t *testing.T) {
 // canonical bytes, so a verifier holding only the public key can confirm the
 // intent was authentically signed — and detect any later edit to a field.
 func TestAppliedAuditPersistsVerifiableSignature(t *testing.T) {
-	e, _, st, signer := build(t, rule)
+	e, _, st, signer := mustEngine(t, rule)
 	defer st.Close()
 	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
 		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
@@ -113,7 +89,7 @@ func TestAppliedAuditPersistsVerifiableSignature(t *testing.T) {
 }
 
 func TestEngineDryRunDoesNotActuate(t *testing.T) {
-	e, f, st, _ := build(t, `
+	e, f, st, _ := mustEngine(t, `
 on: cost.budget_burn
 when: signal.data.spend_1h_usd > 5.0
 then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]

@@ -42,10 +42,7 @@ func Validate(r Rule) error {
 		return err
 	}
 	for _, a := range r.Then {
-		switch core.ActionKind(a.Kind) {
-		case core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage,
-			core.ActionThrottleTenant, core.ActionDisableDeployment:
-		default:
+		if !core.IsKnownActionKind(core.ActionKind(a.Kind)) {
 			return fmt.Errorf("unknown action %q", a.Kind)
 		}
 	}
