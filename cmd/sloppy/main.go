@@ -22,7 +22,7 @@ import (
 
 func run(args []string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: sloppy <version|inject|audit|test|doctor>")
+		fmt.Fprintln(out, "usage: sloppy <version|inject|rules|audit|test|doctor>")
 		return 2
 	}
 	switch args[0] {
@@ -31,6 +31,8 @@ func run(args []string, out io.Writer) int {
 		return 0
 	case "inject":
 		return cmdInject(args[1:], out)
+	case "rules":
+		return cmdRules(args[1:], out)
 	case "audit":
 		return cmdAudit(args[1:], out)
 	case "test":
@@ -214,6 +216,35 @@ func cmdDoctor(args []string, out io.Writer) int {
 	if !allOK {
 		return 1
 	}
+	return 0
+}
+
+func cmdRules(args []string, out io.Writer) int {
+	if len(args) == 0 || args[0] != "validate" {
+		fmt.Fprintln(out, "usage: sloppy rules validate [dir|file]")
+		return 2
+	}
+	path := "rules"
+	if rest := args[1:]; len(rest) >= 1 {
+		path = rest[0]
+	}
+	rs, err := config.LoadRules(path)
+	if err != nil {
+		fmt.Fprintf(out, "✗ %v\n", err)
+		return 1
+	}
+	failed := 0
+	for i, r := range rs {
+		if err := rules.Validate(r); err != nil {
+			fmt.Fprintf(out, "✗ rule %d (sha %s): %v\n", i+1, r.SHA, err)
+			failed++
+		}
+	}
+	if failed > 0 {
+		fmt.Fprintf(out, "%d of %d rule(s) invalid\n", failed, len(rs))
+		return 1
+	}
+	fmt.Fprintf(out, "✓ %d rule(s) valid\n", len(rs))
 	return 0
 }
 
