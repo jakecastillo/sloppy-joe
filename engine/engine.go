@@ -50,14 +50,15 @@ type Result struct {
 
 // Engine is the off-hot-path control loop core.
 type Engine struct {
-	rec      *rules.Reconciler
-	reg      *actuator.Registry
-	store    state.Store
-	signer   intent.Signer
-	led      *ledger.CostLedger
-	now      func() time.Time
-	failMode FailMode
-	met      *metrics.Registry
+	rec       *rules.Reconciler
+	reg       *actuator.Registry
+	store     state.Store
+	signer    intent.Signer
+	led       *ledger.CostLedger
+	now       func() time.Time
+	failMode  FailMode
+	met       *metrics.Registry
+	immediate bool
 
 	mu      sync.Mutex
 	pending map[string]time.Time // ruleSHA|correlationKey -> first-seen, for `for:` gating
@@ -77,6 +78,10 @@ func WithFailMode(m FailMode) Option { return func(e *Engine) { e.failMode = m }
 
 // WithMetrics attaches a self-metrics registry.
 func WithMetrics(m *metrics.Registry) Option { return func(e *Engine) { e.met = m } }
+
+// WithImmediate fires matching rules without waiting for their `for:` window.
+// Used for one-shot CLI injection; the daemon evaluates `for:` across the live stream.
+func WithImmediate() Option { return func(e *Engine) { e.immediate = true } }
 
 // New builds an engine. Extra behaviour is opt-in via Options (back-compatible).
 func New(rec *rules.Reconciler, reg *actuator.Registry, store state.Store, signer intent.Signer, opts ...Option) *Engine {
@@ -103,7 +108,7 @@ func (e *Engine) Handle(ctx context.Context, sig core.Signal) ([]Result, error) 
 	matches := e.rec.EvaluateMatches(sig, st)
 	var results []Result
 	for _, m := range matches {
-		if m.Rule.For > 0 && !e.forWindowSatisfied(m.Rule.SHA, sig.CorrelationKey, m.Rule.For, now) {
+		if m.Rule.For > 0 && !e.immediate && !e.forWindowSatisfied(m.Rule.SHA, sig.CorrelationKey, m.Rule.For, now) {
 			results = append(results, Result{Intent: core.RemediationIntent{RuleSHA: m.Rule.SHA}, Outcome: OutPending})
 			continue
 		}

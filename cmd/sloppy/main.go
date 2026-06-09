@@ -48,6 +48,7 @@ func cmdInject(args []string, out io.Writer) int {
 	fs.SetOutput(out)
 	rulesPath := fs.String("rules", "rules", "rules dir or file")
 	dbPath := fs.String("db", "sloppy.db", "sqlite db path")
+	now := fs.Bool("now", false, "fire matching rules immediately, bypassing for: windows (one-shot)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -82,7 +83,11 @@ func cmdInject(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
 	}
-	e := engine.New(rec, buildRegistry(out), st, signer)
+	var opts []engine.Option
+	if *now {
+		opts = append(opts, engine.WithImmediate())
+	}
+	e := engine.New(rec, buildRegistry(out), st, signer, opts...)
 	results, _ := e.Handle(context.Background(), sig)
 	if len(results) == 0 {
 		fmt.Fprintln(out, "🥪 no rule fired for this signal")
