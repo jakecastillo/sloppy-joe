@@ -117,7 +117,7 @@ func cmdAudit(args []string, out io.Writer) int {
 		return 1
 	}
 	defer st.Close()
-	entries, err := st.Audit()
+	entries, err := st.Audit(context.Background())
 	if err != nil {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
@@ -126,7 +126,7 @@ func cmdAudit(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "%4d  %-16s  %s\n", e.Seq, e.Kind, e.Detail)
 	}
 	status := "verified ✓"
-	if !st.VerifyAudit() {
+	if !st.VerifyAudit(context.Background()) {
 		status = "TAMPERED ✗"
 	}
 	fmt.Fprintf(out, "chain: %s (%d entries)\n", status, len(entries))

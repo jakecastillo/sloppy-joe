@@ -19,22 +19,32 @@ var errBoom = errors.New("store unavailable")
 // errStore implements state.Store but fails reads/writes (simulates outage).
 type errStore struct{}
 
-func (errStore) IsIntentApplied(string) (bool, error) { return false, errBoom }
-func (errStore) MarkIntentApplied(string) error       { return errBoom }
-func (errStore) AppendAudit(string, string) (state.AuditEntry, error) {
+func (errStore) IsIntentApplied(context.Context, string) (bool, error) { return false, errBoom }
+func (errStore) MarkIntentApplied(context.Context, string) error       { return errBoom }
+func (errStore) AppendAudit(context.Context, string, string) (state.AuditEntry, error) {
 	return state.AuditEntry{}, errBoom
 }
-func (errStore) Audit() ([]state.AuditEntry, error)                  { return nil, errBoom }
-func (errStore) VerifyAudit() bool                                   { return false }
-func (errStore) ScheduleRevert(state.PendingRevert) error            { return errBoom }
-func (errStore) DueReverts(time.Time) ([]state.PendingRevert, error) { return nil, errBoom }
-func (errStore) MarkReverted(string) error                           { return errBoom }
-func (errStore) RecordAction(string, time.Time) error                { return errBoom }
-func (errStore) CountActions(string, time.Time) (int, error)         { return 0, errBoom }
-func (errStore) RecordOutstanding(string, state.PendingRevert) error { return errBoom }
-func (errStore) Outstanding(string) ([]state.PendingRevert, error)   { return nil, errBoom }
-func (errStore) ClearOutstanding(string) error                       { return errBoom }
-func (errStore) Close() error                                        { return nil }
+func (errStore) Audit(context.Context) ([]state.AuditEntry, error) { return nil, errBoom }
+func (errStore) VerifyAudit(context.Context) bool                  { return false }
+func (errStore) ScheduleRevert(context.Context, state.PendingRevert) error {
+	return errBoom
+}
+func (errStore) DueReverts(context.Context, time.Time) ([]state.PendingRevert, error) {
+	return nil, errBoom
+}
+func (errStore) MarkReverted(context.Context, string) error            { return errBoom }
+func (errStore) RecordAction(context.Context, string, time.Time) error { return errBoom }
+func (errStore) CountActions(context.Context, string, time.Time) (int, error) {
+	return 0, errBoom
+}
+func (errStore) RecordOutstanding(context.Context, string, state.PendingRevert) error {
+	return errBoom
+}
+func (errStore) Outstanding(context.Context, string) ([]state.PendingRevert, error) {
+	return nil, errBoom
+}
+func (errStore) ClearOutstanding(context.Context, string) error { return errBoom }
+func (errStore) Close() error                                   { return nil }
 
 func engineWithStore(st state.Store, opts ...Option) (*Engine, *actuator.Fake) {
 	rs, _ := rules.ParseRules([]byte(rule))

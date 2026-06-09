@@ -72,7 +72,7 @@ func TestEngineClosesLoopSignsAndIsIdempotent(t *testing.T) {
 	if f.Applied != 1 {
 		t.Fatalf("actuator should fire exactly once, fired %d", f.Applied)
 	}
-	if !st.VerifyAudit() {
+	if !st.VerifyAudit(context.Background()) {
 		t.Fatal("audit chain invalid")
 	}
 }

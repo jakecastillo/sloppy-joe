@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -29,9 +30,7 @@ CREATE TABLE IF NOT EXISTS onclear (
 // OpenSQLite opens (and migrates) a SQLite-backed Store. Pure-Go driver (no cgo).
 //
 // SQLite allows a single writer; the daemon serves requests concurrently, so we
-// serialize writers (SetMaxOpenConns(1)) and set busy_timeout + WAL. Without
-// this, concurrent writes return SQLITE_BUSY and silently drop idempotency,
-// revert, and audit records.
+// serialize writers (SetMaxOpenConns(1)) and set busy_timeout + WAL.
 func OpenSQLite(path string) (Store, error) {
 	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	db, err := sql.Open("sqlite", dsn)
@@ -45,34 +44,34 @@ func OpenSQLite(path string) (Store, error) {
 	return &sqliteStore{db: db}, nil
 }
 
-func (s *sqliteStore) IsIntentApplied(id string) (bool, error) {
+func (s *sqliteStore) IsIntentApplied(ctx context.Context, id string) (bool, error) {
 	var x string
-	err := s.db.QueryRow(`SELECT intent_id FROM applied_intents WHERE intent_id=?`, id).Scan(&x)
+	err := s.db.QueryRowContext(ctx, `SELECT intent_id FROM applied_intents WHERE intent_id=?`, id).Scan(&x)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-func (s *sqliteStore) MarkIntentApplied(id string) error {
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO applied_intents(intent_id) VALUES(?)`, id)
+func (s *sqliteStore) MarkIntentApplied(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO applied_intents(intent_id) VALUES(?)`, id)
 	return err
 }
 
-// AppendAudit is transactional: the read-prev-hash + insert is one atomic unit,
-// so concurrent appends can't fork the chain (combined with SetMaxOpenConns(1)).
-func (s *sqliteStore) AppendAudit(kind, detail string) (AuditEntry, error) {
-	tx, err := s.db.Begin()
+// AppendAudit is transactional: read-prev-hash + insert is one atomic unit so
+// concurrent appends can't fork the chain (with SetMaxOpenConns(1)).
+func (s *sqliteStore) AppendAudit(ctx context.Context, kind, detail string) (AuditEntry, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AuditEntry{}, err
 	}
 	defer tx.Rollback() //nolint:errcheck // rolled back unless committed
 
 	var prev string
-	_ = tx.QueryRow(`SELECT hash FROM audit ORDER BY seq DESC LIMIT 1`).Scan(&prev)
+	_ = tx.QueryRowContext(ctx, `SELECT hash FROM audit ORDER BY seq DESC LIMIT 1`).Scan(&prev)
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	h := ChainHash(ts, kind, detail, prev)
-	res, err := tx.Exec(`INSERT INTO audit(ts,kind,detail,prev_hash,hash) VALUES(?,?,?,?,?)`, ts, kind, detail, prev, h)
+	res, err := tx.ExecContext(ctx, `INSERT INTO audit(ts,kind,detail,prev_hash,hash) VALUES(?,?,?,?,?)`, ts, kind, detail, prev, h)
 	if err != nil {
 		return AuditEntry{}, err
 	}
@@ -84,8 +83,8 @@ func (s *sqliteStore) AppendAudit(kind, detail string) (AuditEntry, error) {
 	return AuditEntry{Seq: int(id), TS: t, Kind: kind, Detail: detail, PrevHash: prev, Hash: h}, nil
 }
 
-func (s *sqliteStore) Audit() ([]AuditEntry, error) {
-	rows, err := s.db.Query(`SELECT seq,ts,kind,detail,prev_hash,hash FROM audit ORDER BY seq ASC`)
+func (s *sqliteStore) Audit(ctx context.Context) ([]AuditEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT seq,ts,kind,detail,prev_hash,hash FROM audit ORDER BY seq ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -103,23 +102,23 @@ func (s *sqliteStore) Audit() ([]AuditEntry, error) {
 	return out, rows.Err()
 }
 
-func (s *sqliteStore) VerifyAudit() bool {
-	es, err := s.Audit()
+func (s *sqliteStore) VerifyAudit(ctx context.Context) bool {
+	es, err := s.Audit(ctx)
 	if err != nil {
 		return false
 	}
 	return VerifyChain(es)
 }
 
-func (s *sqliteStore) ScheduleRevert(r PendingRevert) error {
-	_, err := s.db.Exec(
+func (s *sqliteStore) ScheduleRevert(ctx context.Context, r PendingRevert) error {
+	_, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO pending_reverts(intent_id,kind,target,args,due_at) VALUES(?,?,?,?,?)`,
 		r.IntentID, r.Kind, r.Target, r.ArgsJSON, r.DueAt.UTC().Format(time.RFC3339Nano))
 	return err
 }
 
-func (s *sqliteStore) DueReverts(now time.Time) ([]PendingRevert, error) {
-	rows, err := s.db.Query(`SELECT intent_id,kind,target,args,due_at FROM pending_reverts ORDER BY due_at ASC`)
+func (s *sqliteStore) DueReverts(ctx context.Context, now time.Time) ([]PendingRevert, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT intent_id,kind,target,args,due_at FROM pending_reverts ORDER BY due_at ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -139,31 +138,31 @@ func (s *sqliteStore) DueReverts(now time.Time) ([]PendingRevert, error) {
 	return out, rows.Err()
 }
 
-func (s *sqliteStore) MarkReverted(intentID string) error {
-	_, err := s.db.Exec(`DELETE FROM pending_reverts WHERE intent_id=?`, intentID)
+func (s *sqliteStore) MarkReverted(ctx context.Context, intentID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM pending_reverts WHERE intent_id=?`, intentID)
 	return err
 }
 
-func (s *sqliteStore) RecordAction(ruleSHA string, at time.Time) error {
-	_, err := s.db.Exec(`INSERT INTO rule_actions(rule_sha,ts) VALUES(?,?)`, ruleSHA, at.UTC().Format(time.RFC3339Nano))
+func (s *sqliteStore) RecordAction(ctx context.Context, ruleSHA string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO rule_actions(rule_sha,ts) VALUES(?,?)`, ruleSHA, at.UTC().Format(time.RFC3339Nano))
 	return err
 }
 
-func (s *sqliteStore) CountActions(ruleSHA string, since time.Time) (int, error) {
+func (s *sqliteStore) CountActions(ctx context.Context, ruleSHA string, since time.Time) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM rule_actions WHERE rule_sha=? AND ts>=?`,
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM rule_actions WHERE rule_sha=? AND ts>=?`,
 		ruleSHA, since.UTC().Format(time.RFC3339Nano)).Scan(&n)
 	return n, err
 }
 
-func (s *sqliteStore) RecordOutstanding(key string, r PendingRevert) error {
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO onclear(key,intent_id,kind,target,args) VALUES(?,?,?,?,?)`,
+func (s *sqliteStore) RecordOutstanding(ctx context.Context, key string, r PendingRevert) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO onclear(key,intent_id,kind,target,args) VALUES(?,?,?,?,?)`,
 		key, r.IntentID, r.Kind, r.Target, r.ArgsJSON)
 	return err
 }
 
-func (s *sqliteStore) Outstanding(key string) ([]PendingRevert, error) {
-	rows, err := s.db.Query(`SELECT intent_id,kind,target,args FROM onclear WHERE key=?`, key)
+func (s *sqliteStore) Outstanding(ctx context.Context, key string) ([]PendingRevert, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT intent_id,kind,target,args FROM onclear WHERE key=?`, key)
 	if err != nil {
 		return nil, err
 	}
@@ -179,8 +178,8 @@ func (s *sqliteStore) Outstanding(key string) ([]PendingRevert, error) {
 	return out, rows.Err()
 }
 
-func (s *sqliteStore) ClearOutstanding(key string) error {
-	_, err := s.db.Exec(`DELETE FROM onclear WHERE key=?`, key)
+func (s *sqliteStore) ClearOutstanding(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM onclear WHERE key=?`, key)
 	return err
 }
 

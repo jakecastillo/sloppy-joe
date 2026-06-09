@@ -99,7 +99,7 @@ with: { rollback: on_clear }
 	if f.Reverted != 1 {
 		t.Fatalf("second clear should not revert again, got %d", f.Reverted)
 	}
-	if !st.VerifyAudit() {
+	if !st.VerifyAudit(context.Background()) {
 		t.Fatal("audit chain invalid")
 	}
 }

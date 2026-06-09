@@ -121,7 +121,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]
 	if n, _ := e.ProcessDueReverts(context.Background(), base.Add(2*time.Hour)); n != 0 {
 		t.Fatalf("revert must be one-shot, got %d", n)
 	}
-	if !st.VerifyAudit() {
+	if !st.VerifyAudit(context.Background()) {
 		t.Fatal("audit chain invalid after revert")
 	}
 }
