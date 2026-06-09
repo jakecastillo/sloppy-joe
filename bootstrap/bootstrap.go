@@ -119,12 +119,17 @@ func BuildEngine(eff config.Effective, out io.Writer, logger *slog.Logger) (*eng
 		st.Close()
 		return nil, nil, nil, nil, err
 	}
-	fm := engine.FailOpen
+	fmDefault := engine.FailOpen
 	if eff.Engine.FailMode.Default == "closed" {
-		fm = engine.FailClosed
+		fmDefault = engine.FailClosed
+	}
+	fmNotify := engine.FailOpen
+	if eff.Engine.FailMode.Notify == "closed" {
+		fmNotify = engine.FailClosed
 	}
 	e := engine.New(rec, reg, st, signer,
-		engine.WithLedger(l), engine.WithMetrics(m), engine.WithFailMode(fm), engine.WithLogger(logger))
+		engine.WithLedger(l), engine.WithMetrics(m),
+		engine.WithFailMode(fmDefault), engine.WithFailModeNotify(fmNotify), engine.WithLogger(logger))
 	return e, l, m, func() { st.Close() }, nil
 }
 

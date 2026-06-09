@@ -131,9 +131,11 @@ func applyDefaults(f *File) {
 		f.Engine.LogFormat = "text"
 	}
 	if f.Engine.FailMode.Default == "" {
-		// Behavior-preserving default (fail-open). Phase D flips this to fail-closed
-		// for mutating actions together with the per-capability engine enforcement.
-		f.Engine.FailMode.Default = "open"
+		// Mutating gateway actions (route_override/throttle_tenant/disable_deployment)
+		// fail CLOSED by default: on a state-store error the riskiest moment must not
+		// bypass dedup/budget/audit. Notify stays open (best-effort). This is a
+		// behavior change vs the pre-config daemon, gated in the CHANGELOG.
+		f.Engine.FailMode.Default = "closed"
 	}
 	if f.Engine.FailMode.Notify == "" {
 		f.Engine.FailMode.Notify = "open"

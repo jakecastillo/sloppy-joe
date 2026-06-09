@@ -52,16 +52,17 @@ type Result struct {
 
 // Engine is the off-hot-path control loop core.
 type Engine struct {
-	rec       *rules.Reconciler
-	reg       *actuator.Registry
-	store     state.Store
-	signer    intent.Signer
-	led       *ledger.CostLedger
-	now       func() time.Time
-	failMode  FailMode
-	met       *metrics.Registry
-	immediate bool
-	log       *slog.Logger
+	rec            *rules.Reconciler
+	reg            *actuator.Registry
+	store          state.Store
+	signer         intent.Signer
+	led            *ledger.CostLedger
+	now            func() time.Time
+	failMode       FailMode
+	failModeNotify FailMode
+	met            *metrics.Registry
+	immediate      bool
+	log            *slog.Logger
 
 	mu      sync.Mutex
 	pending map[string]time.Time // ruleSHA|correlationKey -> first-seen, for `for:` gating
@@ -76,8 +77,26 @@ func WithLedger(l *ledger.CostLedger) Option { return func(e *Engine) { e.led = 
 // WithClock overrides the clock (for tests / determinism).
 func WithClock(fn func() time.Time) Option { return func(e *Engine) { e.now = fn } }
 
-// WithFailMode sets store-unreachable behaviour (default FailOpen).
+// WithFailMode sets store-unreachable behaviour for mutating gateway actuations
+// (route_override, throttle_tenant, disable_deployment), and for the state-guard
+// and intent_budget reads (default FailOpen).
 func WithFailMode(m FailMode) Option { return func(e *Engine) { e.failMode = m } }
+
+// WithFailModeNotify sets store-unreachable behaviour for notify actuations
+// (open_issue, page), which are best-effort and default FailOpen even when mutating
+// actions fail closed.
+func WithFailModeNotify(m FailMode) Option { return func(e *Engine) { e.failModeNotify = m } }
+
+// failModeFor returns the fail mode governing an actuation of kind k: notify actions
+// (open_issue, page) use the notify mode; mutating gateway actions use the default.
+func (e *Engine) failModeFor(k core.ActionKind) FailMode {
+	switch k {
+	case core.ActionOpenIssue, core.ActionPage:
+		return e.failModeNotify
+	default:
+		return e.failMode
+	}
+}
 
 // WithMetrics attaches a self-metrics registry.
 func WithMetrics(m *metrics.Registry) Option { return func(e *Engine) { e.met = m } }
@@ -99,10 +118,11 @@ func WithLogger(l *slog.Logger) Option {
 func New(rec *rules.Reconciler, reg *actuator.Registry, store state.Store, signer intent.Signer, opts ...Option) *Engine {
 	e := &Engine{
 		rec: rec, reg: reg, store: store, signer: signer,
-		now:      func() time.Time { return time.Now().UTC() },
-		failMode: FailOpen,
-		log:      slog.New(slog.DiscardHandler),
-		pending:  map[string]time.Time{},
+		now:            func() time.Time { return time.Now().UTC() },
+		failMode:       FailOpen,
+		failModeNotify: FailOpen,
+		log:            slog.New(slog.DiscardHandler),
+		pending:        map[string]time.Time{},
 	}
 	for _, o := range opts {
 		o(e)
@@ -276,7 +296,7 @@ func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now
 	}
 	done, err := e.store.IsIntentApplied(ctx, in.ID)
 	if err != nil {
-		if e.failMode == FailClosed {
+		if e.failModeFor(in.Kind) == FailClosed {
 			_, _ = e.store.AppendAudit(ctx, "intent.fail_closed", auditDetail(in))
 			e.met.Inc("intents_failed")
 			return Result{Intent: in, Outcome: OutFailed, Err: "state unavailable (fail-closed)"}
