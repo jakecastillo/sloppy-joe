@@ -10,13 +10,20 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-type sqliteStore struct{ db *sql.DB }
+type sqliteStore struct {
+	db     *sql.DB
+	signer CheckpointSigner // optional; when set, AppendAudit maintains a signed checkpoint
+}
 
 const schema = `
 CREATE TABLE IF NOT EXISTS applied_intents (intent_id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS audit (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT, kind TEXT, detail TEXT, prev_hash TEXT, hash TEXT
+);
+CREATE TABLE IF NOT EXISTS audit_checkpoint (
+  id INTEGER PRIMARY KEY CHECK (id=1),
+  count INTEGER, head_hash TEXT, sig TEXT, pub_key TEXT
 );
 CREATE TABLE IF NOT EXISTS pending_reverts (
   intent_id TEXT PRIMARY KEY,
@@ -35,7 +42,8 @@ CREATE INDEX IF NOT EXISTS idx_usage ON usage(tenant, ts);`
 //
 // SQLite allows a single writer; the daemon serves requests concurrently, so we
 // serialize writers (SetMaxOpenConns(1)) and set busy_timeout + WAL.
-func OpenSQLite(path string) (Store, error) {
+func OpenSQLite(path string, opts ...StoreOption) (Store, error) {
+	cfg := applyStoreOptions(opts)
 	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -45,7 +53,7 @@ func OpenSQLite(path string) (Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
-	return &sqliteStore{db: db}, nil
+	return &sqliteStore{db: db, signer: cfg.checkpointSigner}, nil
 }
 
 // ClaimIntent inserts the idempotency key in one statement. A plain INSERT (not
@@ -99,6 +107,21 @@ func (s *sqliteStore) AppendAudit(ctx context.Context, kind, detail string) (Aud
 	if err != nil {
 		return AuditEntry{}, err
 	}
+	// Update the signed checkpoint in the SAME transaction so the length/head
+	// anchor can never lag the chain it certifies. Skipped when no signer is set.
+	if s.signer != nil {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit`).Scan(&count); err != nil {
+			return AuditEntry{}, err
+		}
+		cp := MakeCheckpoint(s.signer, count, h)
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO audit_checkpoint(id,count,head_hash,sig,pub_key) VALUES(1,?,?,?,?)
+			 ON CONFLICT(id) DO UPDATE SET count=excluded.count,head_hash=excluded.head_hash,sig=excluded.sig,pub_key=excluded.pub_key`,
+			cp.Count, cp.HeadHash, cp.Sig, cp.PubKey); err != nil {
+			return AuditEntry{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return AuditEntry{}, err
 	}
@@ -131,7 +154,28 @@ func (s *sqliteStore) VerifyAudit(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	return VerifyChain(es)
+	cp, found, err := s.loadCheckpoint(ctx)
+	if err != nil {
+		return false
+	}
+	return VerifyAgainstCheckpoint(es, cp, found, s.signer != nil)
+}
+
+// loadCheckpoint reads the persisted signed checkpoint (found==false when none
+// has ever been written). Reading it is independent of whether THIS handle has a
+// signer, so a verify-only reopen still benefits from an existing anchor.
+func (s *sqliteStore) loadCheckpoint(ctx context.Context) (Checkpoint, bool, error) {
+	var cp Checkpoint
+	err := s.db.QueryRowContext(ctx,
+		`SELECT count,head_hash,sig,pub_key FROM audit_checkpoint WHERE id=1`).
+		Scan(&cp.Count, &cp.HeadHash, &cp.Sig, &cp.PubKey)
+	if err == sql.ErrNoRows {
+		return Checkpoint{}, false, nil
+	}
+	if err != nil {
+		return Checkpoint{}, false, err
+	}
+	return cp, true, nil
 }
 
 func (s *sqliteStore) ScheduleRevert(ctx context.Context, r PendingRevert) error {

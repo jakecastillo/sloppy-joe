@@ -85,19 +85,20 @@ func cmdInject(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
 	}
-	st, err := state.OpenSQLite(*dbPath)
-	if err != nil {
-		fmt.Fprintf(out, "error: %v\n", err)
-		return 1
-	}
-	defer st.Close()
 	// Persist the signing key (and export its public key) so the signatures this
 	// writes to the audit chain are later verifiable via `audit --verify-sigs`.
+	// Loaded before the store so the same key also signs the audit checkpoint.
 	signer, err := intent.LoadOrCreateSigner(*keyPath)
 	if err != nil {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
 	}
+	st, err := state.OpenSQLite(*dbPath, state.WithCheckpointSigner(signer))
+	if err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	defer st.Close()
 	var opts []engine.Option
 	if *now {
 		opts = append(opts, engine.WithImmediate())

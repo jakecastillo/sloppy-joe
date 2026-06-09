@@ -20,8 +20,29 @@ within a few days.
 
 - **Provider keys never enter Sloppy Joe.** Only short-lived, scoped admin/notify
   tokens, held by the secret broker (`secrets`), default-deny by capability.
-- **Audit log is hash-chained** (`state.ChainHash` / `VerifyChain`); tampering is
-  detectable. Append is atomic per backend (SQLite transaction; Redis WATCH/MULTI/EXEC).
+- **Audit log is hash-chained** (`state.ChainHash` / `VerifyChain`); edits to a
+  persisted entry are detectable. Append is atomic per backend (SQLite transaction;
+  Redis WATCH/MULTI/EXEC).
+- **Signed audit checkpoint (length + head anchor).** The hash chain alone has **no
+  length anchor**: any valid prefix of a chain is itself a valid chain, so on its own
+  `VerifyChain` cannot distinguish truncation, full deletion, or a freshly re-chained
+  wholesale replacement from legitimate "less data" — all of those PASS `VerifyChain`.
+  To close that gap, a checkpoint-enabled store maintains a **signed checkpoint**
+  (`state.Checkpoint`: entry count + head hash + ed25519 signature over
+  `CheckpointPayload(count, head_hash)` + the persisted public key), updated **inside
+  the same atomic append** so the anchor can never lag the chain it certifies.
+  `VerifyAudit` (SQLite + Redis) now recomputes the count and head hash, compares them
+  to the persisted checkpoint (fewer rows ⇒ truncation; different head ⇒ replacement;
+  a stripped checkpoint over a non-empty chain ⇒ tamper), and verifies the checkpoint
+  signature against its persisted public key. This raises the bar from **"any DB
+  writer can silently rewrite history"** to **"a DB writer who *also* holds the signing
+  key."**
+  Residual limitation (honest scope): the checkpoint lives in the **same writable
+  store** as the chain. An attacker who holds the signing key — or who rewrites **both**
+  the chain **and** the checkpoint (re-signing it under a key the verifier trusts) — can
+  still forge an internally consistent, "verified" history. Full resistance requires an
+  anchor **outside** the writable store (an external transparency log / periodic offsite
+  attestation of the head + count); that is a deliberate follow-up, not yet implemented.
 - **Remediation intents are ed25519-signed and independently verifiable.** Each
   applied intent's audit entry persists the exact signed canonical bytes plus the
   full signature; `sloppy audit --verify-sigs` recomputes `Intent.CanonicalBytes`

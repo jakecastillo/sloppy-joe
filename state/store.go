@@ -5,6 +5,33 @@ import (
 	"time"
 )
 
+// StoreOption configures a Store at construction. The zero set of options keeps
+// the legacy behavior, so every existing OpenSQLite/OpenRedis caller is unaffected.
+type StoreOption func(*storeConfig)
+
+// storeConfig collects construction-time options shared across backends.
+type storeConfig struct {
+	checkpointSigner CheckpointSigner
+}
+
+// WithCheckpointSigner attaches a signer so the store maintains a signed audit
+// checkpoint (length + head-hash anchor) on every append. Without it the store
+// keeps only the hash chain, which alone cannot detect truncation/deletion/
+// replacement (see VerifyChain). This is the least-invasive seam: it adds an
+// optional capability without changing the Store interface or any caller that
+// doesn't opt in.
+func WithCheckpointSigner(s CheckpointSigner) StoreOption {
+	return func(c *storeConfig) { c.checkpointSigner = s }
+}
+
+func applyStoreOptions(opts []StoreOption) storeConfig {
+	var c storeConfig
+	for _, o := range opts {
+		o(&c)
+	}
+	return c
+}
+
 // PendingRevert is a durable record of an applied, reversible intent awaiting TTL expiry.
 type PendingRevert struct {
 	IntentID string

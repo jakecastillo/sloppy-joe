@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	keyAudit   = "sloppy:audit"
-	keyReverts = "sloppy:pending_reverts"
+	keyAudit      = "sloppy:audit"
+	keyCheckpoint = "sloppy:audit_checkpoint"
+	keyReverts    = "sloppy:pending_reverts"
 
 	// appliedRetention bounds idempotency keys (>> the longest revert TTL).
 	appliedRetention = 30 * 24 * time.Hour
@@ -24,16 +25,18 @@ const (
 )
 
 type redisStore struct {
-	c *redis.Client
+	c      *redis.Client
+	signer CheckpointSigner // optional; when set, AppendAudit maintains a signed checkpoint
 }
 
 // OpenRedis returns a Redis-backed Store (multi-replica capable). Same contract as SQLite.
-func OpenRedis(addr string) (Store, error) {
+func OpenRedis(addr string, opts ...StoreOption) (Store, error) {
+	cfg := applyStoreOptions(opts)
 	c := redis.NewClient(&redis.Options{Addr: addr})
 	if err := c.Ping(context.Background()).Err(); err != nil {
 		return nil, err
 	}
-	return &redisStore{c: c}, nil
+	return &redisStore{c: c, signer: cfg.checkpointSigner}, nil
 }
 
 // ClaimIntent uses SET ... NX as the atomic at-most-once gate: the first caller
@@ -74,12 +77,28 @@ func (s *redisStore) AppendAudit(ctx context.Context, kind, detail string) (Audi
 				prev = lr.Hash
 			}
 		}
+		// Read the current length under the same WATCH so the checkpoint count we
+		// sign matches the list after the RPush below (no other writer can slip in).
+		curLen, err := tx.LLen(ctx, keyAudit).Result()
+		if err != nil {
+			return err
+		}
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		h := ChainHash(ts, kind, detail, prev)
 		b, _ := json.Marshal(auditRec{TS: ts, Kind: kind, Detail: detail, PrevHash: prev, Hash: h})
+		var cpb []byte
+		if s.signer != nil {
+			cp := MakeCheckpoint(s.signer, int(curLen)+1, h)
+			cpb, _ = json.Marshal(cp)
+		}
 		var rp *redis.IntCmd
 		if _, err := tx.TxPipelined(ctx, func(p redis.Pipeliner) error {
 			rp = p.RPush(ctx, keyAudit, b)
+			if cpb != nil {
+				// Checkpoint lands in the SAME MULTI/EXEC as the append, so the
+				// length/head anchor and the chain commit atomically.
+				p.Set(ctx, keyCheckpoint, cpb, 0)
+			}
 			return nil
 		}); err != nil {
 			return err
@@ -89,7 +108,7 @@ func (s *redisStore) AppendAudit(ctx context.Context, kind, detail string) (Audi
 		return nil
 	}
 	for i := 0; i < maxRetries; i++ {
-		err := s.c.Watch(ctx, txf, keyAudit)
+		err := s.c.Watch(ctx, txf, keyAudit, keyCheckpoint)
 		if err == nil {
 			return entry, nil
 		}
@@ -123,7 +142,29 @@ func (s *redisStore) VerifyAudit(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	return VerifyChain(es)
+	cp, found, err := s.loadCheckpoint(ctx)
+	if err != nil {
+		return false
+	}
+	return VerifyAgainstCheckpoint(es, cp, found, s.signer != nil)
+}
+
+// loadCheckpoint reads the persisted signed checkpoint (found==false when none
+// exists). Independent of whether THIS handle has a signer, so a verify-only
+// connection still honors an existing anchor.
+func (s *redisStore) loadCheckpoint(ctx context.Context) (Checkpoint, bool, error) {
+	v, err := s.c.Get(ctx, keyCheckpoint).Result()
+	if err == redis.Nil {
+		return Checkpoint{}, false, nil
+	}
+	if err != nil {
+		return Checkpoint{}, false, err
+	}
+	var cp Checkpoint
+	if err := json.Unmarshal([]byte(v), &cp); err != nil {
+		return Checkpoint{}, false, err
+	}
+	return cp, true, nil
 }
 
 type revertRec struct {
