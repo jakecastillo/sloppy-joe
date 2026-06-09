@@ -26,7 +26,7 @@ checks it off, advances; stops when NOW is clear.
   paths; keep human stdout for the CLI. *Satisfied: engine `WithLogger` option
   (no-op default) + a test asserting a handled signal emits a structured record
   (slog test handler).*
-- [ ] **Plan 17 — `throttle_tenant` + `disable_deployment` intents.** Add the two
+- [x] **Plan 17 — `throttle_tenant` + `disable_deployment` intents.** Add the two
   `core.ActionKind`s; implement on the LiteLLM actuator (per-key rate-limit / model
   disable admin calls), reversible so TTL-revert + `rollback:on_clear` cover them;
   extend `actuator.Conformance`; add an example rule (cost runaway → `throttle_tenant`

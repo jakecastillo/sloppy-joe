@@ -11,9 +11,11 @@ import (
 type ActionKind string
 
 const (
-	ActionRouteOverride ActionKind = "route_override"
-	ActionOpenIssue     ActionKind = "open_issue"
-	ActionPage          ActionKind = "page"
+	ActionRouteOverride     ActionKind = "route_override"
+	ActionOpenIssue         ActionKind = "open_issue"
+	ActionPage              ActionKind = "page"
+	ActionThrottleTenant    ActionKind = "throttle_tenant"
+	ActionDisableDeployment ActionKind = "disable_deployment"
 )
 
 // RemediationIntent is a signed, reversible request to change the world.

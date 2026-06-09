@@ -81,7 +81,18 @@ func (rc *Reconciler) Cleared(sig core.Signal, state map[string]any) []Rule {
 }
 
 func actionToIntent(a Action, r Rule, sig core.Signal) core.RemediationIntent {
+	// The remediation subject differs by action kind.
 	target := sig.Subject.Alias
+	switch core.ActionKind(a.Kind) {
+	case core.ActionThrottleTenant:
+		if sig.Subject.Tenant != "" {
+			target = sig.Subject.Tenant
+		}
+	case core.ActionDisableDeployment:
+		if sig.Subject.Deployment != "" {
+			target = sig.Subject.Deployment
+		}
+	}
 	ttl := time.Duration(0)
 	if s, ok := a.Args["ttl"].(string); ok {
 		if d, err := time.ParseDuration(s); err == nil {

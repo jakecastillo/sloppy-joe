@@ -43,9 +43,10 @@ func Validate(r Rule) error {
 	}
 	for _, a := range r.Then {
 		switch core.ActionKind(a.Kind) {
-		case core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage:
+		case core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage,
+			core.ActionThrottleTenant, core.ActionDisableDeployment:
 		default:
-			return fmt.Errorf("unknown action %q (want route_override|open_issue|page)", a.Kind)
+			return fmt.Errorf("unknown action %q", a.Kind)
 		}
 	}
 	if _, _, err := ParseIntentBudget(r.With.IntentBudget); err != nil {

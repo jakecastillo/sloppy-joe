@@ -25,17 +25,16 @@ type httpRouteActuator struct {
 	name    string
 	baseURL string
 	token   TokenFunc
+	caps    []core.ActionKind
 	build   requestFn
 	client  *http.Client
 }
 
-func newHTTPRoute(name, baseURL string, token TokenFunc, build requestFn) Actuator {
-	return &httpRouteActuator{name: name, baseURL: baseURL, token: token, build: build, client: &http.Client{Timeout: 10 * time.Second}}
+func newHTTPRoute(name, baseURL string, token TokenFunc, caps []core.ActionKind, build requestFn) Actuator {
+	return &httpRouteActuator{name: name, baseURL: baseURL, token: token, caps: caps, build: build, client: &http.Client{Timeout: 10 * time.Second}}
 }
 
-func (a *httpRouteActuator) Capabilities() []core.ActionKind {
-	return []core.ActionKind{core.ActionRouteOverride}
-}
+func (a *httpRouteActuator) Capabilities() []core.ActionKind { return a.caps }
 
 func (a *httpRouteActuator) do(ctx context.Context, i core.RemediationIntent, isRevert bool) error {
 	tok, err := a.token()
