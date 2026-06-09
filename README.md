@@ -147,6 +147,16 @@ curl localhost:8723/status
 - **`for:` windows:** one-shot `sloppy inject --now` fires immediately; the `sloppyd` daemon evaluates `for:` windows across the live signal stream.
 - **Gate rules in CI (no infra):** `sloppy rules validate ./rules` compiles every CEL `when`, checks action kinds + `intent_budget`, and exits non-zero on error — drop it in a PR check.
 
+## Documentation
+
+New here? The fastest path to productive:
+
+1. **Run it** — the [Quickstart](#quickstart) above, then poke at [`examples/`](examples/) (CEL rules + a sample signal + a replay fixture).
+2. **Understand why it exists** — [`docs/vision.md`](docs/vision.md): the problem, the pivot, and the wedge.
+3. **See who it's for** — [`docs/audience.md`](docs/audience.md): who *operates* it vs. who *benefits*.
+
+📖 **Full documentation map → [`docs/`](docs/README.md)** — every doc, grouped by intent (*understand · plan · validate · contribute*). One index, no duplicated copy: descriptions live there, this README just points in.
+
 ## Principles
 
 - **Model-agnostic** — consumes OpenTelemetry GenAI + CloudEvents, acts via vendor-neutral signed intents
