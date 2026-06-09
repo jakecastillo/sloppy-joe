@@ -5,6 +5,46 @@ import (
 	"time"
 )
 
+// StoreOption configures a Store at construction. The zero set of options keeps
+// the legacy behavior, so every existing OpenSQLite/OpenRedis caller is unaffected.
+type StoreOption func(*storeConfig)
+
+// storeConfig collects construction-time options shared across backends.
+type storeConfig struct {
+	checkpointSigner  CheckpointSigner
+	requireCheckpoint bool
+}
+
+// WithCheckpointSigner attaches a signer so the store maintains a signed audit
+// checkpoint (length + head-hash anchor) on every append. Without it the store
+// keeps only the hash chain, which alone cannot detect truncation/deletion/
+// replacement (see VerifyChain). This is the least-invasive seam: it adds an
+// optional capability without changing the Store interface or any caller that
+// doesn't opt in.
+func WithCheckpointSigner(s CheckpointSigner) StoreOption {
+	return func(c *storeConfig) { c.checkpointSigner = s }
+}
+
+// WithRequireCheckpoint opens a store in verify-only enforcing mode: VerifyAudit
+// treats a missing checkpoint over a non-empty chain as tampering, EVEN without a
+// signer attached. This is the auditor's seam — `sloppy audit` can hold only the
+// public key (or no key at all) yet still detect a stripped checkpoint, because
+// VerifyAgainstCheckpoint verifies the persisted checkpoint using its own
+// cp.PubKey/cp.Sig and never needs the private Sign() path. Without this, a
+// no-signer reopen falls back to the legacy chain-only guarantee and reads a
+// checkpoint-strip as "verified".
+func WithRequireCheckpoint(require bool) StoreOption {
+	return func(c *storeConfig) { c.requireCheckpoint = require }
+}
+
+func applyStoreOptions(opts []StoreOption) storeConfig {
+	var c storeConfig
+	for _, o := range opts {
+		o(&c)
+	}
+	return c
+}
+
 // PendingRevert is a durable record of an applied, reversible intent awaiting TTL expiry.
 type PendingRevert struct {
 	IntentID string
@@ -18,8 +58,20 @@ type PendingRevert struct {
 // Every I/O method takes a context so callers' cancellation/deadlines reach the
 // backend (Close is teardown and intentionally context-free).
 type Store interface {
-	IsIntentApplied(ctx context.Context, intentID string) (bool, error)
-	MarkIntentApplied(ctx context.Context, intentID string) error
+	// ClaimIntent atomically records the idempotency key for intentID and reports
+	// whether THIS caller created it. It is the at-most-once gate that closes the
+	// apply-twice TOCTOU: with N concurrent callers for one id, exactly one gets
+	// claimed==true (it then actuates); the rest get false (they skip). A losing
+	// claim is not an error. Backed by a single conditional write (SQLite
+	// INSERT + PK conflict; Redis SET NX), never an in-process lock, so the gate
+	// holds across replicas.
+	ClaimIntent(ctx context.Context, intentID string) (claimed bool, err error)
+	// ReleaseIntent removes a previously claimed idempotency key so the intent can
+	// be re-attempted. The engine calls it only when actuation FAILS after a
+	// winning claim, so a transient actuator error doesn't permanently poison the
+	// id (without it, claim-before-apply would make every failed apply un-retryable).
+	// Releasing an absent key is a no-op.
+	ReleaseIntent(ctx context.Context, intentID string) error
 	AppendAudit(ctx context.Context, kind, detail string) (AuditEntry, error)
 	Audit(ctx context.Context) ([]AuditEntry, error)
 	VerifyAudit(ctx context.Context) bool

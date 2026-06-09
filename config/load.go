@@ -14,15 +14,18 @@ import (
 )
 
 // OpenStore opens the configured state backend ("sqlite" default, or "redis").
-func OpenStore(kind, sqlitePath, redisAddr string) (state.Store, error) {
+// Optional StoreOptions (e.g. state.WithCheckpointSigner) are forwarded to the
+// backend so callers can enable the signed audit checkpoint without OpenStore
+// needing to know about signing.
+func OpenStore(kind, sqlitePath, redisAddr string, opts ...state.StoreOption) (state.Store, error) {
 	switch kind {
 	case "", "sqlite":
-		return state.OpenSQLite(sqlitePath)
+		return state.OpenSQLite(sqlitePath, opts...)
 	case "redis":
 		if redisAddr == "" {
 			return nil, fmt.Errorf("config: redis store requires a redis address")
 		}
-		return state.OpenRedis(redisAddr)
+		return state.OpenRedis(redisAddr, opts...)
 	default:
 		return nil, fmt.Errorf("config: unknown store %q (want sqlite|redis)", kind)
 	}

@@ -19,8 +19,8 @@ var errBoom = errors.New("store unavailable")
 // errStore implements state.Store but fails reads/writes (simulates outage).
 type errStore struct{}
 
-func (errStore) IsIntentApplied(context.Context, string) (bool, error) { return false, errBoom }
-func (errStore) MarkIntentApplied(context.Context, string) error       { return errBoom }
+func (errStore) ClaimIntent(context.Context, string) (bool, error) { return false, errBoom }
+func (errStore) ReleaseIntent(context.Context, string) error       { return errBoom }
 func (errStore) AppendAudit(context.Context, string, string) (state.AuditEntry, error) {
 	return state.AuditEntry{}, errBoom
 }

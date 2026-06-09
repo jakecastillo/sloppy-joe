@@ -3,18 +3,31 @@ package state
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
-type sqliteStore struct{ db *sql.DB }
+type sqliteStore struct {
+	db     *sql.DB
+	signer CheckpointSigner // optional; when set, AppendAudit maintains a signed checkpoint
+	// requireCheckpoint forces VerifyAudit to enforce checkpoint presence even when
+	// signer is nil (verify-only auditor that holds no private key). See
+	// WithRequireCheckpoint.
+	requireCheckpoint bool
+}
 
 const schema = `
 CREATE TABLE IF NOT EXISTS applied_intents (intent_id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS audit (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT, kind TEXT, detail TEXT, prev_hash TEXT, hash TEXT
+);
+CREATE TABLE IF NOT EXISTS audit_checkpoint (
+  id INTEGER PRIMARY KEY CHECK (id=1),
+  count INTEGER, head_hash TEXT, sig TEXT, pub_key TEXT
 );
 CREATE TABLE IF NOT EXISTS pending_reverts (
   intent_id TEXT PRIMARY KEY,
@@ -33,7 +46,8 @@ CREATE INDEX IF NOT EXISTS idx_usage ON usage(tenant, ts);`
 //
 // SQLite allows a single writer; the daemon serves requests concurrently, so we
 // serialize writers (SetMaxOpenConns(1)) and set busy_timeout + WAL.
-func OpenSQLite(path string) (Store, error) {
+func OpenSQLite(path string, opts ...StoreOption) (Store, error) {
+	cfg := applyStoreOptions(opts)
 	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -43,20 +57,40 @@ func OpenSQLite(path string) (Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
-	return &sqliteStore{db: db}, nil
+	return &sqliteStore{db: db, signer: cfg.checkpointSigner, requireCheckpoint: cfg.requireCheckpoint}, nil
 }
 
-func (s *sqliteStore) IsIntentApplied(ctx context.Context, id string) (bool, error) {
-	var x string
-	err := s.db.QueryRowContext(ctx, `SELECT intent_id FROM applied_intents WHERE intent_id=?`, id).Scan(&x)
-	if err == sql.ErrNoRows {
-		return false, nil
+// ClaimIntent inserts the idempotency key in one statement. A plain INSERT (not
+// OR IGNORE) lets us distinguish the winner from a loser: the winner affects one
+// row; a duplicate trips the PRIMARY KEY constraint, which we treat as a clean
+// "someone else already claimed it" (false, nil) rather than an I/O error. With
+// SetMaxOpenConns(1) writes serialize, so concurrent claims of the same id can
+// never both succeed.
+func (s *sqliteStore) ClaimIntent(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `INSERT INTO applied_intents(intent_id) VALUES(?)`, id)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return false, nil // already claimed by another caller — not an error
+		}
+		return false, err
 	}
-	return err == nil, err
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
-func (s *sqliteStore) MarkIntentApplied(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO applied_intents(intent_id) VALUES(?)`, id)
+// isUniqueViolation reports whether err is a SQLite PRIMARY KEY / UNIQUE
+// constraint failure (extended codes share the SQLITE_CONSTRAINT primary code).
+func isUniqueViolation(err error) bool {
+	var se *sqlite.Error
+	return errors.As(err, &se) && se.Code()&0xff == sqlite3.SQLITE_CONSTRAINT
+}
+
+// ReleaseIntent deletes the idempotency key so a failed actuation can be retried.
+func (s *sqliteStore) ReleaseIntent(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM applied_intents WHERE intent_id=?`, id)
 	return err
 }
 
@@ -76,6 +110,21 @@ func (s *sqliteStore) AppendAudit(ctx context.Context, kind, detail string) (Aud
 	res, err := tx.ExecContext(ctx, `INSERT INTO audit(ts,kind,detail,prev_hash,hash) VALUES(?,?,?,?,?)`, ts, kind, detail, prev, h)
 	if err != nil {
 		return AuditEntry{}, err
+	}
+	// Update the signed checkpoint in the SAME transaction so the length/head
+	// anchor can never lag the chain it certifies. Skipped when no signer is set.
+	if s.signer != nil {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit`).Scan(&count); err != nil {
+			return AuditEntry{}, err
+		}
+		cp := MakeCheckpoint(s.signer, count, h)
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO audit_checkpoint(id,count,head_hash,sig,pub_key) VALUES(1,?,?,?,?)
+			 ON CONFLICT(id) DO UPDATE SET count=excluded.count,head_hash=excluded.head_hash,sig=excluded.sig,pub_key=excluded.pub_key`,
+			cp.Count, cp.HeadHash, cp.Sig, cp.PubKey); err != nil {
+			return AuditEntry{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return AuditEntry{}, err
@@ -109,7 +158,28 @@ func (s *sqliteStore) VerifyAudit(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	return VerifyChain(es)
+	cp, found, err := s.loadCheckpoint(ctx)
+	if err != nil {
+		return false
+	}
+	return VerifyAgainstCheckpoint(es, cp, found, s.signer != nil || s.requireCheckpoint)
+}
+
+// loadCheckpoint reads the persisted signed checkpoint (found==false when none
+// has ever been written). Reading it is independent of whether THIS handle has a
+// signer, so a verify-only reopen still benefits from an existing anchor.
+func (s *sqliteStore) loadCheckpoint(ctx context.Context) (Checkpoint, bool, error) {
+	var cp Checkpoint
+	err := s.db.QueryRowContext(ctx,
+		`SELECT count,head_hash,sig,pub_key FROM audit_checkpoint WHERE id=1`).
+		Scan(&cp.Count, &cp.HeadHash, &cp.Sig, &cp.PubKey)
+	if err == sql.ErrNoRows {
+		return Checkpoint{}, false, nil
+	}
+	if err != nil {
+		return Checkpoint{}, false, err
+	}
+	return cp, true, nil
 }
 
 func (s *sqliteStore) ScheduleRevert(ctx context.Context, r PendingRevert) error {

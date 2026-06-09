@@ -22,6 +22,8 @@ go.work.sum
 *.local
 *.pem
 *.key
+sloppy.key
+sloppy.key.pub
 *.sqlite
 *.db
 /data/

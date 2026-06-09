@@ -57,6 +57,68 @@ func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.Cos
 	return nil
 }
 
+// checkBindAuth enforces the fail-safe bind policy: an unauthenticated control
+// plane must not be exposed on a network-reachable address. It returns an error
+// when addr is non-loopback (a specific LAN/WAN ip, or the wildcard/empty host
+// that listens on every interface) while auth is disabled. Loopback binds and any
+// bind with --auth on are allowed.
+func checkBindAuth(addr string, authEnabled bool) error {
+	if authEnabled {
+		return nil
+	}
+	if addrIsLoopback(addr) {
+		return nil
+	}
+	return fmt.Errorf("refusing to bind %q without --auth: that address is reachable from the network and the API would be UNAUTHENTICATED. Enable --auth (with SLOPPY_API_KEYS), or bind a loopback address (127.0.0.1 / [::1])", addr)
+}
+
+// addrIsLoopback reports whether a listen address binds only the loopback
+// interface. An empty host (e.g. ":8723") or a wildcard (0.0.0.0 / ::) binds every
+// interface and is therefore NOT loopback. A hostname that resolves entirely to
+// loopback ips (e.g. "localhost") counts as loopback.
+func addrIsLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// No port (or malformed): treat the whole string as a host.
+		host = addr
+	}
+	if host == "" {
+		return false // ":8723" => all interfaces
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	// Hostname: loopback only if every resolved address is loopback.
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return false
+	}
+	for _, ip := range ips {
+		if !ip.IsLoopback() {
+			return false
+		}
+	}
+	return true
+}
+
+// logAuthState emits a LOUD, unambiguous startup line for the API auth posture so
+// an operator can never silently run an open control plane — or, worse, an
+// auth-on-but-no-keys instance where every protected route is locked out. The two
+// hazardous states (auth disabled; auth enabled with zero keys) log at WARN; the
+// healthy state logs at INFO.
+func logAuthState(logger *slog.Logger, authEnabled bool, keyCount int) {
+	switch {
+	case !authEnabled:
+		logger.Warn("API auth disabled: the HTTP API is UNAUTHENTICATED — anyone who can reach it can drive the control loop. Enable --auth (with SLOPPY_API_KEYS) before exposing it",
+			"auth", false)
+	case keyCount == 0:
+		logger.Warn("API auth enabled but NO api keys are configured: every protected route is unreachable. Set SLOPPY_API_KEYS",
+			"auth", true, "keys", 0)
+	default:
+		logger.Info("API auth enabled", "auth", true, "keys", keyCount)
+	}
+}
+
 // runRevertScan performs one tick of the TTL auto-revert safety net: it processes
 // due reverts and prunes stale usage. Both are best-effort against the store, but
 // neither error may be swallowed silently — a store outage that disables the
@@ -145,6 +207,14 @@ func main() {
 	var authz *ee.Authorizer
 	if eff.Auth.Enabled {
 		authz = ee.LoadFromEnv()
+	}
+
+	// Make the auth posture LOUD and refuse to expose an unauthenticated API on a
+	// network-reachable address. Both run before we open any port.
+	logAuthState(logger, eff.Auth.Enabled, authz.KeyCount())
+	if err := checkBindAuth(eff.Server.Addr, eff.Auth.Enabled); err != nil {
+		fmt.Fprintln(os.Stderr, "bind guard:", err)
+		os.Exit(1)
 	}
 
 	e, l, m, cleanup, err := bootstrap.BuildEngine(eff, os.Stdout, logger)

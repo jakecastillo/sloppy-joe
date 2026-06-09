@@ -87,19 +87,20 @@ func cmdInject(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
 	}
-	st, err := state.OpenSQLite(*dbPath)
-	if err != nil {
-		fmt.Fprintf(out, "error: %v\n", err)
-		return 1
-	}
-	defer st.Close()
 	// Persist the signing key (and export its public key) so the signatures this
 	// writes to the audit chain are later verifiable via `audit --verify-sigs`.
+	// Loaded before the store so the same key also signs the audit checkpoint.
 	signer, err := intent.LoadOrCreateSigner(*keyPath)
 	if err != nil {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
 	}
+	st, err := state.OpenSQLite(*dbPath, state.WithCheckpointSigner(signer))
+	if err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	defer st.Close()
 	var opts []engine.Option
 	if *now {
 		opts = append(opts, engine.WithImmediate())
@@ -134,7 +135,14 @@ func cmdAudit(args []string, out io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	st, err := state.OpenSQLite(*dbPath)
+	// `sloppy audit` is THE operator/CI tamper-check surface — the daemon never
+	// re-verifies at runtime. Open the store in verify-only enforcing mode so the
+	// signed checkpoint anchor is REQUIRED: a stripped audit_checkpoint over a
+	// non-empty (otherwise re-chained) chain reads as TAMPERED rather than falling
+	// back to the chain-only guarantee that truncation/replacement can defeat. This
+	// needs no private key — the checkpoint is verified using its own persisted
+	// public key + signature, never Sign().
+	st, err := state.OpenSQLite(*dbPath, state.WithRequireCheckpoint(true))
 	if err != nil {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
@@ -149,12 +157,23 @@ func cmdAudit(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "%4d  %-16s  %s\n", e.Seq, e.Kind, e.Detail)
 	}
 	status := "verified ✓"
-	if !st.VerifyAudit(context.Background()) {
+	chainOK := st.VerifyAudit(context.Background())
+	if !chainOK {
 		status = "TAMPERED ✗"
 	}
 	fmt.Fprintf(out, "chain: %s (%d entries)\n", status, len(entries))
 	if *verifySigs {
-		return verifyAuditSigs(out, entries, *keyPath, *pubPath)
+		rc := verifyAuditSigs(out, entries, *keyPath, *pubPath)
+		// A tampered chain must gate even when signatures happen to verify.
+		if !chainOK && rc == 0 {
+			return 1
+		}
+		return rc
+	}
+	// A TAMPERED chain (broken links, truncation, or a stripped/forged checkpoint)
+	// must exit non-zero so operators and CI treat it as a failure, not just a log line.
+	if !chainOK {
+		return 1
 	}
 	return 0
 }

@@ -3,6 +3,7 @@ package state
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,18 +15,37 @@ func storeContract(t *testing.T, s Store) {
 	t.Helper()
 	ctx := t.Context()
 
-	// Idempotency.
-	if a, _ := s.IsIntentApplied(ctx, "i1"); a {
-		t.Fatal("i1 should be new")
+	// Idempotency: ClaimIntent is the atomic at-most-once gate. The first claim
+	// of an id wins (true); every later claim of the same id loses (false) but
+	// is NOT an error — the loser simply skips.
+	if claimed, err := s.ClaimIntent(ctx, "i1"); err != nil || !claimed {
+		t.Fatalf("first claim of i1 must win: claimed=%v err=%v", claimed, err)
 	}
-	if err := s.MarkIntentApplied(ctx, "i1"); err != nil {
-		t.Fatal(err)
+	if claimed, err := s.ClaimIntent(ctx, "i1"); err != nil || claimed {
+		t.Fatalf("second claim of i1 must lose without error: claimed=%v err=%v", claimed, err)
 	}
-	if a, _ := s.IsIntentApplied(ctx, "i1"); !a {
-		t.Fatal("i1 should be applied")
+	// A distinct id is unaffected.
+	if claimed, err := s.ClaimIntent(ctx, "i2"); err != nil || !claimed {
+		t.Fatalf("first claim of i2 must win: claimed=%v err=%v", claimed, err)
 	}
-	if err := s.MarkIntentApplied(ctx, "i1"); err != nil {
-		t.Fatalf("re-mark must be idempotent: %v", err)
+
+	// Concurrency: N racing claims of the SAME id => exactly one winner. This is
+	// the store-level gate that closes the TOCTOU double-apply, so it must hold
+	// under -race against the real backend (not an in-process mutex).
+	var wins int64
+	var cwg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		cwg.Add(1)
+		go func() {
+			defer cwg.Done()
+			if claimed, err := s.ClaimIntent(ctx, "race-id"); err == nil && claimed {
+				atomic.AddInt64(&wins, 1)
+			}
+		}()
+	}
+	cwg.Wait()
+	if wins != 1 {
+		t.Fatalf("exactly one concurrent claim must win, got %d", wins)
 	}
 
 	// Hash-chained audit.

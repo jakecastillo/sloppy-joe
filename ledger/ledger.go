@@ -10,6 +10,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// State keys exposed to CEL `state.*` guards. These are the contract between the
+// ledger (producer, in StateFor) and rule conditions (consumer, e.g.
+// `state.spend_1h_usd > 10`); naming them keeps the producer and any Go-side
+// consumer from drifting against a bare string literal.
+const (
+	// StateKeySpend1h is the estimated tenant spend over the trailing hour (USD).
+	StateKeySpend1h = "spend_1h_usd"
+	// StateKeySpend24h is the estimated tenant spend over the trailing 24 hours (USD).
+	StateKeySpend24h = "spend_24h_usd"
+)
+
 // Price is per-1k-token pricing for a model.
 type Price struct {
 	InputPer1K  float64 `yaml:"input_per_1k"`
@@ -71,5 +82,5 @@ func (l *CostLedger) StateFor(ctx context.Context, tenant string, now time.Time)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"spend_1h_usd": h, "spend_24h_usd": d}, nil
+	return map[string]any{StateKeySpend1h: h, StateKeySpend24h: d}, nil
 }

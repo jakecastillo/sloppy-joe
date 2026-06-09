@@ -21,7 +21,17 @@ func TestE2ECostSpikeRemediates(t *testing.T) {
 	if base == "" {
 		t.Skip("set SLOPPY_E2E_BASE (e.g. http://localhost:8723) to run against the compose stack")
 	}
+	// The compose stack runs sloppyd with --auth on a network-reachable bind (the
+	// bind guard refuses an unauthenticated public bind), so authenticated routes
+	// require an api key. SLOPPY_E2E_API_KEY supplies it; /healthz stays public.
+	apiKey := os.Getenv("SLOPPY_E2E_API_KEY")
 	client := &http.Client{Timeout: 10 * time.Second}
+	authed := func(req *http.Request) (*http.Response, error) {
+		if apiKey != "" {
+			req.Header.Set("X-API-Key", apiKey)
+		}
+		return client.Do(req)
+	}
 
 	resp, err := client.Get(base + "/healthz")
 	if err != nil || resp.StatusCode != http.StatusOK {
@@ -30,13 +40,16 @@ func TestE2ECostSpikeRemediates(t *testing.T) {
 	resp.Body.Close()
 
 	body := `{"type":"cost.budget_burn","correlation_key":"e2e:cost","subject":{"tenant":"acme","alias":"gpt-4o"},"data":{"spend_1h_usd":99.0}}`
-	resp, err = client.Post(base+"/v1/signals", "application/json", strings.NewReader(body))
+	sigReq, _ := http.NewRequest("POST", base+"/v1/signals", strings.NewReader(body))
+	sigReq.Header.Set("Content-Type", "application/json")
+	resp, err = authed(sigReq)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("post signal failed: %v", err)
 	}
 	resp.Body.Close()
 
-	resp, err = client.Get(base + "/status")
+	statusReq, _ := http.NewRequest("GET", base+"/status", nil)
+	resp, err = authed(statusReq)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}

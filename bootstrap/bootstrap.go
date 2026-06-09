@@ -21,6 +21,7 @@ import (
 	"github.com/sloppyjoe/sloppy/recipe"
 	"github.com/sloppyjoe/sloppy/rules"
 	"github.com/sloppyjoe/sloppy/secrets"
+	"github.com/sloppyjoe/sloppy/state"
 )
 
 // BuildRegistry constructs the actuator Registry from the effective platform
@@ -91,13 +92,16 @@ func BuildEngine(eff config.Effective, out io.Writer, logger *slog.Logger) (*eng
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	st, err := config.OpenStore(eff.Store.Kind, eff.Store.Path, eff.Store.RedisAddr)
+	// Load the signer BEFORE opening the store so the same key that signs intents
+	// also signs the store's audit checkpoint (the length+head anchor that makes
+	// truncation/deletion/replacement detectable, not just edits).
+	signer, err := intent.LoadOrCreateSigner(eff.Engine.SigningKey)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	signer, err := intent.LoadOrCreateSigner(eff.Engine.SigningKey)
+	st, err := config.OpenStore(eff.Store.Kind, eff.Store.Path, eff.Store.RedisAddr,
+		state.WithCheckpointSigner(signer))
 	if err != nil {
-		st.Close()
 		return nil, nil, nil, nil, err
 	}
 	var pb ledger.PriceBook
