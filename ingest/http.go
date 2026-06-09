@@ -4,6 +4,7 @@ package ingest
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -17,6 +18,28 @@ import (
 // to persist. It turns silently-dropped financial data into an observable signal on
 // the /status registry.
 const metricUsageRecordFailed = "usage_record_failed"
+
+// Per-handler request body caps (defense against unbounded reads). http.MaxBytesReader
+// short-circuits the read and lets the handler return 4xx instead of buffering an
+// attacker-controlled body into memory. Signals and single-event usage are small
+// JSON; OTLP metrics batches are larger but still bounded.
+const (
+	maxSignalBytes = 1 << 20  // 1 MiB
+	maxUsageBytes  = 1 << 20  // 1 MiB
+	maxOTLPBytes   = 16 << 20 // 16 MiB (OTLP batches can be large)
+)
+
+// Routes is the set of paths the ingest mux registers, in registration order. It
+// is the single source of truth used both to build the mux and by the RBAC guard
+// test to assert every registered route has an explicit ee.ScopeForPath mapping
+// (an unmapped route must fail closed, not inherit a write scope).
+var Routes = []string{
+	"/healthz",
+	"/v1/signals",
+	"/v1/usage",
+	"/v1/otlp/metrics",
+	"/status",
+}
 
 // Server adapts HTTP requests into engine + ledger calls.
 type Server struct {
@@ -36,16 +59,38 @@ func (s *Server) SetMetrics(m *metrics.Registry) *Server {
 	return s
 }
 
-// Handler returns the configured HTTP mux.
+// capBody wraps h so the request body is limited to max bytes via
+// http.MaxBytesReader. A read past the limit returns an error the handler turns
+// into a 4xx, instead of buffering an unbounded body into memory.
+func capBody(max int64, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, max)
+		h(w, r)
+	}
+}
+
+// bodyCapError reports whether err is the MaxBytesReader over-limit error and, if
+// so, the 413 status and message a handler should return. Over-limit bodies are a
+// client fault (too large), distinct from malformed JSON (400).
+func bodyCapError(err error) (status int, msg string, over bool) {
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return http.StatusRequestEntityTooLarge, "request body too large", true
+	}
+	return 0, "", false
+}
+
+// Handler returns the configured HTTP mux. Routes must stay in sync with the
+// Routes slice (asserted by the RBAC guard test).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("/v1/signals", s.handleSignal)
-	mux.HandleFunc("/v1/usage", s.handleUsage)
-	mux.HandleFunc("/v1/otlp/metrics", s.handleOTLP)
+	mux.HandleFunc("/v1/signals", capBody(maxSignalBytes, s.handleSignal))
+	mux.HandleFunc("/v1/usage", capBody(maxUsageBytes, s.handleUsage))
+	mux.HandleFunc("/v1/otlp/metrics", capBody(maxOTLPBytes, s.handleOTLP))
 	mux.HandleFunc("/status", s.handleStatus)
 	return mux
 }
@@ -77,6 +122,10 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	}
 	var sig core.Signal
 	if err := json.NewDecoder(r.Body).Decode(&sig); err != nil {
+		if status, msg, over := bodyCapError(err); over {
+			http.Error(w, msg, status)
+			return
+		}
 		http.Error(w, "bad signal json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -117,6 +166,10 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	var u usageReq
 	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+		if status, msg, over := bodyCapError(err); over {
+			http.Error(w, msg, status)
+			return
+		}
 		http.Error(w, "bad usage json: "+err.Error(), http.StatusBadRequest)
 		return
 	}

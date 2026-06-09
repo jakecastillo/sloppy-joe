@@ -123,6 +123,75 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]
 	}
 }
 
+// The bind guard refuses to expose an unauthenticated control plane on a
+// network-reachable address: a non-loopback (incl. wildcard) bind without --auth
+// is an error; loopback binds and authenticated public binds are allowed.
+func TestBindGuard(t *testing.T) {
+	cases := []struct {
+		addr      string
+		auth      bool
+		wantError bool
+	}{
+		{":8723", false, true},            // wildcard, no auth => refuse
+		{"0.0.0.0:8723", false, true},     // explicit wildcard, no auth => refuse
+		{"[::]:8723", false, true},        // IPv6 wildcard, no auth => refuse
+		{"192.168.1.5:8723", false, true}, // LAN ip, no auth => refuse
+		{":8723", true, false},            // wildcard WITH auth => ok
+		{"0.0.0.0:8723", true, false},     // wildcard WITH auth => ok
+		{"127.0.0.1:8723", false, false},  // loopback, no auth => ok
+		{"localhost:8723", false, false},  // loopback name, no auth => ok
+		{"[::1]:8723", false, false},      // IPv6 loopback, no auth => ok
+	}
+	for _, c := range cases {
+		err := checkBindAuth(c.addr, c.auth)
+		if c.wantError && err == nil {
+			t.Fatalf("addr=%q auth=%v: expected a bind-guard error, got nil", c.addr, c.auth)
+		}
+		if !c.wantError && err != nil {
+			t.Fatalf("addr=%q auth=%v: expected no error, got %v", c.addr, c.auth, err)
+		}
+	}
+}
+
+// Startup must LOUDLY distinguish the three auth states so an operator never
+// silently runs an open control plane (or an auth-on-but-no-keys lockout).
+func TestAuthStateStartupLog(t *testing.T) {
+	cases := []struct {
+		name     string
+		enabled  bool
+		keyCount int
+		want     string
+	}{
+		{"auth-off", false, 0, "auth disabled"},
+		{"auth-on-with-keys", true, 3, "auth enabled"},
+		{"auth-on-empty-keys", true, 0, "auth enabled but NO api keys"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			logAuthState(logger, c.enabled, c.keyCount)
+			out := buf.String()
+			if !strings.Contains(out, c.want) {
+				t.Fatalf("auth log for %s missing %q, got: %q", c.name, c.want, out)
+			}
+		})
+	}
+
+	// auth-off and auth-on-empty-keys are operational hazards: they must log at WARN.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	logAuthState(logger, false, 0)
+	if !strings.Contains(buf.String(), "auth disabled") {
+		t.Fatalf("auth-off must log at WARN (loud), got: %q", buf.String())
+	}
+	buf.Reset()
+	logAuthState(logger, true, 0)
+	if !strings.Contains(buf.String(), "NO api keys") {
+		t.Fatalf("auth-on-empty-keys must log at WARN (loud), got: %q", buf.String())
+	}
+}
+
 func TestServeHealthSignalAndStatus(t *testing.T) {
 	dir := t.TempDir()
 	rulesDir := filepath.Join(dir, "rules")

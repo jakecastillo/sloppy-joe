@@ -119,6 +119,10 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		if status, msg, over := bodyCapError(err); over {
+			http.Error(w, msg, status)
+			return
+		}
 		http.Error(w, "read error", http.StatusBadRequest)
 		return
 	}

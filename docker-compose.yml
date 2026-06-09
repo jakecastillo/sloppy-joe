@@ -2,9 +2,10 @@
 # (state) + sloppyd (the control loop). No provider keys required.
 #
 #   docker compose up -d --build
-#   curl -XPOST localhost:8723/v1/signals -d @examples/signals/cost-spike.json
-#   curl localhost:8723/status
-#   SLOPPY_E2E_BASE=http://localhost:8723 go test -tags integration ./test/e2e/...
+#   # API auth is on (bind guard requires it on a public bind); pass the dev key:
+#   curl -H 'X-API-Key: dev' -XPOST localhost:8723/v1/signals -d @examples/signals/cost-spike.json
+#   curl -H 'X-API-Key: dev' localhost:8723/status   # /healthz stays public
+#   SLOPPY_E2E_BASE=http://localhost:8723 SLOPPY_E2E_API_KEY=dev go test -tags integration ./test/e2e/...
 services:
   ollama:
     image: ollama/ollama:latest
@@ -42,9 +43,14 @@ services:
       # .env file with a throwaway dev fallback. In production prefer the broker's
       # file form, SLOPPY_TOKEN_LITELLM_FILE, pointing at a mounted /run/secrets file.
       SLOPPY_TOKEN_LITELLM: ${SLOPPY_TOKEN_LITELLM:-sk-sloppy-dev}
+      # The container's :8723 bind is network-reachable (port-mapped to the host), so
+      # sloppyd's bind guard requires --auth. Supply a throwaway dev api key with both
+      # scopes; override SLOPPY_API_KEYS / SLOPPY_E2E_API_KEY for anything real.
+      SLOPPY_API_KEYS: ${SLOPPY_API_KEYS:-dev=ingest:write,status:read}
     command:
       - "--addr"
       - ":8723"
+      - "--auth"
       - "--rules"
       - "/app/examples/rules"
       - "--store"
