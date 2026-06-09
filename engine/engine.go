@@ -1,6 +1,6 @@
 // Package engine wires reconcile → sign → govern → actuate → audit, with
-// `for:` windowing, ledger-driven state, durable TTL auto-revert, a
-// fail-open/closed knob, and self-metrics.
+// `for:` windowing, ledger-driven state, intent_budget + rollback:on_clear,
+// durable TTL auto-revert, a fail-open/closed knob, and self-metrics.
 package engine
 
 import (
@@ -41,7 +41,7 @@ const (
 	FailClosed
 )
 
-// Result reports what happened to one intent (or a pending rule) in a Handle pass.
+// Result reports what happened to one intent (or a pending/throttled rule) in a Handle pass.
 type Result struct {
 	Intent  core.RemediationIntent
 	Outcome Outcome
@@ -112,7 +112,7 @@ func (e *Engine) Handle(ctx context.Context, sig core.Signal) ([]Result, error) 
 			results = append(results, Result{Intent: core.RemediationIntent{RuleSHA: m.Rule.SHA}, Outcome: OutPending})
 			continue
 		}
-		if e.throttled(m.Rule, now) {
+		if e.throttled(ctx, m.Rule, now) {
 			results = append(results, Result{Intent: core.RemediationIntent{RuleSHA: m.Rule.SHA}, Outcome: OutThrottled})
 			continue
 		}
@@ -128,7 +128,7 @@ func (e *Engine) Handle(ctx context.Context, sig core.Signal) ([]Result, error) 
 			key := m.Rule.SHA + "|" + sig.CorrelationKey
 			for _, in := range applied {
 				args, _ := json.Marshal(in.Args)
-				_ = e.store.RecordOutstanding(key, state.PendingRevert{
+				_ = e.store.RecordOutstanding(ctx, key, state.PendingRevert{
 					IntentID: in.ID, Kind: string(in.Kind), Target: in.Target, ArgsJSON: string(args),
 				})
 			}
@@ -143,25 +143,25 @@ func (e *Engine) Handle(ctx context.Context, sig core.Signal) ([]Result, error) 
 
 // throttled enforces intent_budget per (rule, window): true when the budget is
 // exhausted, otherwise it records this firing.
-func (e *Engine) throttled(r rules.Rule, now time.Time) bool {
+func (e *Engine) throttled(ctx context.Context, r rules.Rule, now time.Time) bool {
 	count, window, err := rules.ParseIntentBudget(r.With.IntentBudget)
 	if err != nil || count == 0 {
 		return false // unset / unlimited
 	}
-	used, _ := e.store.CountActions(r.SHA, now.Add(-window))
+	used, _ := e.store.CountActions(ctx, r.SHA, now.Add(-window))
 	if used >= count {
-		_, _ = e.store.AppendAudit("intent.throttled", fmt.Sprintf("rule=%s budget=%s used=%d", r.SHA, r.With.IntentBudget, used))
+		_, _ = e.store.AppendAudit(ctx, "intent.throttled", fmt.Sprintf("rule=%s budget=%s used=%d", r.SHA, r.With.IntentBudget, used))
 		e.met.Inc("intents_throttled")
 		return true
 	}
-	_ = e.store.RecordAction(r.SHA, now)
+	_ = e.store.RecordAction(ctx, r.SHA, now)
 	return false
 }
 
 // rollbackOnClear reverts and clears a rule's outstanding on-clear intents.
 func (e *Engine) rollbackOnClear(ctx context.Context, r rules.Rule, corr string) {
 	key := r.SHA + "|" + corr
-	outs, _ := e.store.Outstanding(key)
+	outs, _ := e.store.Outstanding(ctx, key)
 	if len(outs) == 0 {
 		return
 	}
@@ -172,12 +172,12 @@ func (e *Engine) rollbackOnClear(ctx context.Context, r rules.Rule, corr string)
 		}
 		in := core.RemediationIntent{ID: pr.IntentID, Kind: core.ActionKind(pr.Kind), Target: pr.Target, Args: args}
 		if _, err := e.reg.Revert(ctx, in); err != nil {
-			_, _ = e.store.AppendAudit("intent.rollback_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
+			_, _ = e.store.AppendAudit(ctx, "intent.rollback_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
 			continue
 		}
-		_, _ = e.store.AppendAudit("intent.rolled_back", fmt.Sprintf("%s target=%s (condition cleared)", pr.Kind, pr.Target))
+		_, _ = e.store.AppendAudit(ctx, "intent.rolled_back", fmt.Sprintf("%s target=%s (condition cleared)", pr.Kind, pr.Target))
 	}
-	_ = e.store.ClearOutstanding(key)
+	_ = e.store.ClearOutstanding(ctx, key)
 	e.met.Inc("intents_rolled_back")
 }
 
@@ -207,14 +207,14 @@ func (e *Engine) forWindowSatisfied(ruleSHA, corr string, dur time.Duration, now
 func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now time.Time) Result {
 	in.Signature = e.signer.Sign(in.CanonicalBytes())
 	if in.DryRun {
-		_, _ = e.store.AppendAudit("intent.dry_run", auditDetail(in))
+		_, _ = e.store.AppendAudit(ctx, "intent.dry_run", auditDetail(in))
 		e.met.Inc("intents_dry_run")
 		return Result{Intent: in, Outcome: OutDryRun}
 	}
-	done, err := e.store.IsIntentApplied(in.ID)
+	done, err := e.store.IsIntentApplied(ctx, in.ID)
 	if err != nil {
 		if e.failMode == FailClosed {
-			_, _ = e.store.AppendAudit("intent.fail_closed", auditDetail(in))
+			_, _ = e.store.AppendAudit(ctx, "intent.fail_closed", auditDetail(in))
 			e.met.Inc("intents_failed")
 			return Result{Intent: in, Outcome: OutFailed, Err: "state unavailable (fail-closed)"}
 		}
@@ -226,28 +226,28 @@ func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now
 	}
 	rcpt, err := e.reg.Apply(ctx, in)
 	if err != nil {
-		_, _ = e.store.AppendAudit("intent.failed", fmt.Sprintf("%s err=%v", auditDetail(in), err))
+		_, _ = e.store.AppendAudit(ctx, "intent.failed", fmt.Sprintf("%s err=%v", auditDetail(in), err))
 		e.met.Inc("intents_failed")
 		return Result{Intent: in, Outcome: OutFailed, Err: err.Error()}
 	}
 	rcpt.Signature = e.signer.Sign([]byte(rcpt.IntentID + string(rcpt.Outcome) + rcpt.Actuator))
-	if err := e.store.MarkIntentApplied(in.ID); err != nil {
+	if err := e.store.MarkIntentApplied(ctx, in.ID); err != nil {
 		// A lost idempotency record silently breaks at-most-once — surface it.
 		e.met.Inc("state_write_failed")
-		_, _ = e.store.AppendAudit("intent.mark_failed", auditDetail(in)+fmt.Sprintf(" err=%v", err))
+		_, _ = e.store.AppendAudit(ctx, "intent.mark_failed", auditDetail(in)+fmt.Sprintf(" err=%v", err))
 	}
-	if _, err := e.store.AppendAudit("intent.applied", auditDetail(in)+" sig="+short(in.Signature)); err != nil {
+	if _, err := e.store.AppendAudit(ctx, "intent.applied", auditDetail(in)+" sig="+short(in.Signature)); err != nil {
 		e.met.Inc("audit_write_failed")
 	}
 	if in.TTL > 0 {
 		args, _ := json.Marshal(in.Args)
-		if err := e.store.ScheduleRevert(state.PendingRevert{
+		if err := e.store.ScheduleRevert(ctx, state.PendingRevert{
 			IntentID: in.ID, Kind: string(in.Kind), Target: in.Target,
 			ArgsJSON: string(args), DueAt: now.Add(in.TTL),
 		}); err != nil {
 			// The TTL auto-revert safety net wasn't armed — make it observable.
 			e.met.Inc("reverts_unscheduled")
-			_, _ = e.store.AppendAudit("intent.revert_unscheduled", auditDetail(in)+fmt.Sprintf(" err=%v", err))
+			_, _ = e.store.AppendAudit(ctx, "intent.revert_unscheduled", auditDetail(in)+fmt.Sprintf(" err=%v", err))
 		}
 	}
 	e.met.Inc("intents_applied")
@@ -256,7 +256,7 @@ func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now
 
 // ProcessDueReverts reverts intents whose TTL has elapsed. Returns count reverted.
 func (e *Engine) ProcessDueReverts(ctx context.Context, now time.Time) (int, error) {
-	due, err := e.store.DueReverts(now)
+	due, err := e.store.DueReverts(ctx, now)
 	if err != nil {
 		return 0, err
 	}
@@ -268,16 +268,16 @@ func (e *Engine) ProcessDueReverts(ctx context.Context, now time.Time) (int, err
 		}
 		in := core.RemediationIntent{ID: pr.IntentID, Kind: core.ActionKind(pr.Kind), Target: pr.Target, Args: args}
 		if _, err := e.reg.Revert(ctx, in); err != nil {
-			_, _ = e.store.AppendAudit("intent.revert_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
+			_, _ = e.store.AppendAudit(ctx, "intent.revert_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
 			continue // leave it pending so the next tick retries
 		}
-		if err := e.store.MarkReverted(pr.IntentID); err != nil {
+		if err := e.store.MarkReverted(ctx, pr.IntentID); err != nil {
 			// Don't count as reverted or it re-fires forever — surface the stuck row.
 			e.met.Inc("reverts_unmarked")
-			_, _ = e.store.AppendAudit("intent.revert_mark_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
+			_, _ = e.store.AppendAudit(ctx, "intent.revert_mark_failed", fmt.Sprintf("%s err=%v", pr.IntentID, err))
 			continue
 		}
-		_, _ = e.store.AppendAudit("intent.reverted", fmt.Sprintf("%s target=%s", pr.Kind, pr.Target))
+		_, _ = e.store.AppendAudit(ctx, "intent.reverted", fmt.Sprintf("%s target=%s", pr.Kind, pr.Target))
 		e.met.Inc("intents_reverted")
 		n++
 	}

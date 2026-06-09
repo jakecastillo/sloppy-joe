@@ -11,9 +11,13 @@ import (
 )
 
 const (
-	keyApplied = "sloppy:applied_intents"
 	keyAudit   = "sloppy:audit"
 	keyReverts = "sloppy:pending_reverts"
+
+	// appliedRetention bounds idempotency keys (>> the longest revert TTL).
+	appliedRetention = 30 * 24 * time.Hour
+	// actionRetention bounds the per-rule firing log (>> the longest budget window).
+	actionRetention = 7 * 24 * time.Hour
 )
 
 type redisStore struct {
@@ -29,12 +33,14 @@ func OpenRedis(addr string) (Store, error) {
 	return &redisStore{c: c}, nil
 }
 
-func (s *redisStore) IsIntentApplied(id string) (bool, error) {
-	return s.c.SIsMember(context.Background(), keyApplied, id).Result()
+// Idempotency keys are stored per-id with a TTL so the set can't grow forever.
+func (s *redisStore) IsIntentApplied(ctx context.Context, id string) (bool, error) {
+	n, err := s.c.Exists(ctx, "sloppy:applied:"+id).Result()
+	return n > 0, err
 }
 
-func (s *redisStore) MarkIntentApplied(id string) error {
-	return s.c.SAdd(context.Background(), keyApplied, id).Err()
+func (s *redisStore) MarkIntentApplied(ctx context.Context, id string) error {
+	return s.c.Set(ctx, "sloppy:applied:"+id, 1, appliedRetention).Err()
 }
 
 type auditRec struct {
@@ -45,11 +51,9 @@ type auditRec struct {
 	Hash     string `json:"hash"`
 }
 
-// AppendAudit links a new entry atomically. The read-prev + push is wrapped in
-// WATCH/MULTI/EXEC with retry-on-conflict so concurrent appends (across replicas)
-// cannot fork the tamper-evident chain.
-func (s *redisStore) AppendAudit(kind, detail string) (AuditEntry, error) {
-	ctx := context.Background()
+// AppendAudit links a new entry atomically via WATCH/MULTI/EXEC with retry, so
+// concurrent appends (across replicas) cannot fork the tamper-evident chain.
+func (s *redisStore) AppendAudit(ctx context.Context, kind, detail string) (AuditEntry, error) {
 	const maxRetries = 16
 	var entry AuditEntry
 	txf := func(tx *redis.Tx) error {
@@ -87,8 +91,8 @@ func (s *redisStore) AppendAudit(kind, detail string) (AuditEntry, error) {
 	return AuditEntry{}, fmt.Errorf("redis: audit append contention after %d retries", maxRetries)
 }
 
-func (s *redisStore) Audit() ([]AuditEntry, error) {
-	vals, err := s.c.LRange(context.Background(), keyAudit, 0, -1).Result()
+func (s *redisStore) Audit(ctx context.Context) ([]AuditEntry, error) {
+	vals, err := s.c.LRange(ctx, keyAudit, 0, -1).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -104,8 +108,8 @@ func (s *redisStore) Audit() ([]AuditEntry, error) {
 	return out, nil
 }
 
-func (s *redisStore) VerifyAudit() bool {
-	es, err := s.Audit()
+func (s *redisStore) VerifyAudit(ctx context.Context) bool {
+	es, err := s.Audit(ctx)
 	if err != nil {
 		return false
 	}
@@ -119,13 +123,13 @@ type revertRec struct {
 	DueAt  string `json:"due_at"`
 }
 
-func (s *redisStore) ScheduleRevert(r PendingRevert) error {
+func (s *redisStore) ScheduleRevert(ctx context.Context, r PendingRevert) error {
 	b, _ := json.Marshal(revertRec{Kind: r.Kind, Target: r.Target, Args: r.ArgsJSON, DueAt: r.DueAt.UTC().Format(time.RFC3339Nano)})
-	return s.c.HSetNX(context.Background(), keyReverts, r.IntentID, b).Err() // idempotent on IntentID
+	return s.c.HSetNX(ctx, keyReverts, r.IntentID, b).Err() // idempotent on IntentID
 }
 
-func (s *redisStore) DueReverts(now time.Time) ([]PendingRevert, error) {
-	m, err := s.c.HGetAll(context.Background(), keyReverts).Result()
+func (s *redisStore) DueReverts(ctx context.Context, now time.Time) ([]PendingRevert, error) {
+	m, err := s.c.HGetAll(ctx, keyReverts).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -143,29 +147,34 @@ func (s *redisStore) DueReverts(now time.Time) ([]PendingRevert, error) {
 	return out, nil
 }
 
-func (s *redisStore) MarkReverted(id string) error {
-	return s.c.HDel(context.Background(), keyReverts, id).Err()
+func (s *redisStore) MarkReverted(ctx context.Context, id string) error {
+	return s.c.HDel(ctx, keyReverts, id).Err()
 }
 
-func (s *redisStore) RecordAction(ruleSHA string, at time.Time) error {
+func (s *redisStore) RecordAction(ctx context.Context, ruleSHA string, at time.Time) error {
+	key := "sloppy:ract:" + ruleSHA
 	ns := at.UnixNano()
-	return s.c.ZAdd(context.Background(), "sloppy:ract:"+ruleSHA,
-		redis.Z{Score: float64(ns), Member: strconv.FormatInt(ns, 10)}).Err()
+	if err := s.c.ZAdd(ctx, key, redis.Z{Score: float64(ns), Member: strconv.FormatInt(ns, 10)}).Err(); err != nil {
+		return err
+	}
+	// Bound the key: prune entries older than retention, then refresh its TTL.
+	cutoff := at.Add(-actionRetention).UnixNano()
+	_ = s.c.ZRemRangeByScore(ctx, key, "-inf", "("+strconv.FormatInt(cutoff, 10)).Err()
+	return s.c.Expire(ctx, key, actionRetention).Err()
 }
 
-func (s *redisStore) CountActions(ruleSHA string, since time.Time) (int, error) {
-	n, err := s.c.ZCount(context.Background(), "sloppy:ract:"+ruleSHA,
-		strconv.FormatInt(since.UnixNano(), 10), "+inf").Result()
+func (s *redisStore) CountActions(ctx context.Context, ruleSHA string, since time.Time) (int, error) {
+	n, err := s.c.ZCount(ctx, "sloppy:ract:"+ruleSHA, strconv.FormatInt(since.UnixNano(), 10), "+inf").Result()
 	return int(n), err
 }
 
-func (s *redisStore) RecordOutstanding(key string, r PendingRevert) error {
+func (s *redisStore) RecordOutstanding(ctx context.Context, key string, r PendingRevert) error {
 	b, _ := json.Marshal(revertRec{Kind: r.Kind, Target: r.Target, Args: r.ArgsJSON})
-	return s.c.HSet(context.Background(), "sloppy:onclear:"+key, r.IntentID, b).Err()
+	return s.c.HSet(ctx, "sloppy:onclear:"+key, r.IntentID, b).Err()
 }
 
-func (s *redisStore) Outstanding(key string) ([]PendingRevert, error) {
-	m, err := s.c.HGetAll(context.Background(), "sloppy:onclear:"+key).Result()
+func (s *redisStore) Outstanding(ctx context.Context, key string) ([]PendingRevert, error) {
+	m, err := s.c.HGetAll(ctx, "sloppy:onclear:"+key).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -180,8 +189,8 @@ func (s *redisStore) Outstanding(key string) ([]PendingRevert, error) {
 	return out, nil
 }
 
-func (s *redisStore) ClearOutstanding(key string) error {
-	return s.c.Del(context.Background(), "sloppy:onclear:"+key).Err()
+func (s *redisStore) ClearOutstanding(ctx context.Context, key string) error {
+	return s.c.Del(ctx, "sloppy:onclear:"+key).Err()
 }
 
 func (s *redisStore) Close() error { return s.c.Close() }

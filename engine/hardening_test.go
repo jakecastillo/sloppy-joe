@@ -25,7 +25,7 @@ func burnSig() core.Signal {
 
 func auditHas(t *testing.T, st state.Store, kind string) bool {
 	t.Helper()
-	es, _ := st.Audit()
+	es, _ := st.Audit(context.Background())
 	for _, e := range es {
 		if e.Kind == kind {
 			return true
@@ -73,7 +73,7 @@ type markFailStore struct {
 	state.Store
 }
 
-func (m markFailStore) MarkReverted(string) error { return errBoom }
+func (m markFailStore) MarkReverted(context.Context, string) error { return errBoom }
 
 func TestMarkRevertedFailureSurfaced(t *testing.T) {
 	base := time.Unix(1749340800, 0).UTC()

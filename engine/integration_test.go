@@ -57,7 +57,7 @@ func TestClosedLoopAgainstMockLiteLLM_Restart(t *testing.T) {
 	if got := atomic.LoadInt64(&calls); got != 1 {
 		t.Fatalf("LiteLLM admin must be called exactly once across restart+replay, got %d", got)
 	}
-	if !st2.VerifyAudit() {
+	if !st2.VerifyAudit(context.Background()) {
 		t.Fatal("audit chain invalid after resume")
 	}
 }
