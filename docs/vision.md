@@ -55,6 +55,11 @@ A gateway/router/OpenAI-normalization layer · a WASM plugin ABI · a Dify-style
 
 The lone platform / AI-infra engineer at a **20–200-person AI-product company** already running a gateway and at least one local model (Ollama/vLLM), getting paged about provider outages, surprise token bills, and model regressions with no automated, auditable response. **Not** the solo hobbyist; **not** the large enterprise platform team (yet).
 
+> Beachhead ≠ total market. The platform engineer *operates* the loop; FinOps,
+> compliance/GRC, SRE, and eng leadership *benefit* from it but have no surface of
+> their own yet. The operator-vs-beneficiary persona model and the demand-gated
+> plan to widen onto those roles live in [`audience.md`](audience.md).
+
 ## Phase 0 — validate before you build (the defining gate)
 
 The project-defining risk is **unvalidated demand**: do operators actually want response-policy as a reviewed, replayable artifact, or is the n8n + budget-cron + Grafana duct tape "good enough" forever? Before hardening the rule engine: recruit 3–5 design-partner platform engineers, confirm they hand-roll the duct tape and want response-as-artifact, write kill-criteria vs Envoy AI Gateway / LiteLLM / Portkey / n8n / StackStorm, and lock the Signal/Rule/Intent v0.1 schema with them. If the duct tape isn't painful enough to replace — stop or pivot.
