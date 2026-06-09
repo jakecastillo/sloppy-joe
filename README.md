@@ -140,11 +140,12 @@ curl -XPOST localhost:8723/v1/signals -d @examples/signals/cost-spike.json
 curl localhost:8723/status
 ```
 
-**Commands:** `sloppy inject` · `sloppy test --replay` · `sloppy audit tail` · `sloppy doctor` · `sloppyd` (daemon).
+**Commands:** `sloppy inject` · `sloppy rules validate` · `sloppy test --replay` · `sloppy audit tail` · `sloppy doctor` · `sloppyd` (daemon).
 - **State backend:** `sloppyd --store sqlite` (default) or `--store redis --redis-addr host:6379`.
 - **Auth:** `sloppyd --auth` with `SLOPPY_API_KEYS="key1=ingest:write,status:read"`.
 - **Gateway:** to wire a real LiteLLM admin API, set `SLOPPY_LITELLM_URL` and `SLOPPY_TOKEN_LITELLM`.
 - **`for:` windows:** one-shot `sloppy inject --now` fires immediately; the `sloppyd` daemon evaluates `for:` windows across the live signal stream.
+- **Gate rules in CI (no infra):** `sloppy rules validate ./rules` compiles every CEL `when`, checks action kinds + `intent_budget`, and exits non-zero on error — drop it in a PR check.
 
 ## Principles
 
