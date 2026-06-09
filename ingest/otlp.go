@@ -128,10 +128,31 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
+	recorded, failed := 0, 0
 	for _, ev := range events {
-		_ = s.ledger.Record(r.Context(), ev.tenant, ev.model, ev.input, ev.output, now)
+		// Financial data: a persistence error must NOT be swallowed. Count each
+		// datapoint as recorded or failed, surface failures on the metrics
+		// registry, and let the status code reflect partial/total loss so the
+		// caller (and dashboards) see the outage instead of a false 202.
+		if err := s.ledger.Record(r.Context(), ev.tenant, ev.model, ev.input, ev.output, now); err != nil {
+			failed++
+			s.metrics.Inc(metricUsageRecordFailed)
+			continue
+		}
+		recorded++
+	}
+
+	// 202 only when everything persisted. Any loss => non-2xx so the failure is
+	// not reported as success: 207 Multi-Status when at least one datapoint
+	// persisted (partial), 500 when nothing did (total outage).
+	status := http.StatusAccepted
+	switch {
+	case failed > 0 && recorded > 0:
+		status = http.StatusMultiStatus
+	case failed > 0:
+		status = http.StatusInternalServerError
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(map[string]int{"recorded": len(events)})
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]int{"recorded": recorded, "failed": failed})
 }

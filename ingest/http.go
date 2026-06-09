@@ -13,6 +13,11 @@ import (
 	"github.com/sloppyjoe/sloppy/metrics"
 )
 
+// metricUsageRecordFailed counts usage/OTLP datapoints whose ledger.Record failed
+// to persist. It turns silently-dropped financial data into an observable signal on
+// the /status registry.
+const metricUsageRecordFailed = "usage_record_failed"
+
 // Server adapts HTTP requests into engine + ledger calls.
 type Server struct {
 	engine  *engine.Engine
@@ -122,6 +127,10 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.ledger.Record(r.Context(), u.Tenant, u.Model, u.InputTokens, u.OutputTokens, at); err != nil {
+		// Single-event contract: still 500, but surface the loss on the metrics
+		// registry (handleOTLP shares this counter) instead of only logging via
+		// the response body.
+		s.metrics.Inc(metricUsageRecordFailed)
 		http.Error(w, "record error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
