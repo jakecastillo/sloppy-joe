@@ -1,22 +1,59 @@
 # Sloppy Joe — Plan Backlog (ralph loop)
 
-**Done:** Plans 1–8 (v0 + post-v0), quality audit (3 rounds), CI/CD — see CHANGELOG + git history.
+**Done:** Plans 1–8 (v0 + post-v0), quality audit (3 rounds), CI/CD, and Plans 9–14
+(planning-pass NOW tier: demo fix, `rules validate`, governance enforcement,
+ctx-through-Store + Redis TTL, persisted ledger, Phase-0 kit). See CHANGELOG + git.
 
-A 5-lens planning pass (2026-06-08, see `2026-06-08-roadmap.md`) found the headline demo + governance were broken/dead while surrounding engineering was strong. This backlog fixes *the product*, then validates demand.
+Roadmap: `2026-06-08-roadmap.md`. This backlog promotes the roadmap's NEXT tier to NOW.
 
-Each plan is **satisfied completely** only when: `gofmt` clean · `go vet` clean · `golangci-lint` 0 issues · `go test ./...` green · binaries build · committed. The loop takes the next unchecked plan in order (dependency-sequenced), finishes it to that bar, checks it off, advances; stops when NOW is clear.
+Each plan is **satisfied completely** only when: `gofmt` clean · `go vet` clean ·
+`golangci-lint` 0 issues · `go test ./...` green · both binaries build · committed.
+The loop takes the next unchecked plan in dependency order, finishes it to that bar,
+checks it off, advances; stops when NOW is clear.
 
 ## NOW (this loop)
 
-- [x] **Plan 9 — Fix the flagship demo.** `sloppy inject` with the example `for: 5m` rule never fires (each CLI run builds a fresh engine → the in-process for-window can never be satisfied) and writes an empty audit chain — contradicting the README. Add a `--now` flag to `sloppy inject` that bypasses the for-window for one explicit injection; add `examples/rules/cost-guard-demo.yaml` (no `for:`); reconcile the README quickstart with reality. *Satisfied: a `cmd/sloppy` test asserts `inject --now` prints `applied route_override` and `audit tail` shows a verified multi-entry chain.*
-- [x] **Plan 10 — `sloppy rules validate <dir>`.** Zero-infra CI gate promised by spec §15 but missing. Load rules via `config.LoadRules`, CEL-compile every `when`, type-check action kinds against `core.ActionKind`, validate `intent_budget` syntax, emit line-level errors, non-zero exit on failure. *Satisfied: tests for a valid dir (exit 0) and an invalid dir (exit≠0, names the file); README CI snippet added.*
-- [x] **Plan 11 — Enforce `intent_budget` + `rollback: on_clear`.** Both are parsed (`rules/rule.go`) but never enforced (dead config; the README rule's `intent_budget: 3/h` no-ops). Enforce a per-(ruleSHA,window) budget in `engine.applyIntent` (new `OutThrottled` outcome + audit + metric on exceed); implement `rollback: on_clear` (revert a rule's outstanding intents when it stops matching on a later tick); add decorrelated jitter to actuator retries. *Satisfied: tests assert throttle past budget + an on-clear revert.*
-- [x] **Plan 12 — Thread `context.Context` through `state.Store` + bound Redis keys.** Add `ctx` as the first param to every Store method; thread from engine + ingest; SQLite `*Context` variants; Redis uses the passed ctx (replace the `context.Background()` sites); add `EXPIRE`/TTL to the applied-intents set (bounded retention ≫ longest revert TTL). *Satisfied: contract test uses `t.Context()`; a retention-bounded assertion; all green.* **(Do before Plan 13 — changes every Store signature.)**
-- [x] **Plan 13 — Persist + bound the cost ledger behind `state.Store`.** Ledger is in-memory/unbounded/resets on restart (contradicts the architecture diagram). Add `RecordUsage`/`SpendSince` to `state.Store` (SQLite usage table indexed on (tenant,at); Redis per-tenant sorted-set by ts); `ledger.CostLedger` becomes the pricing layer over the store; prune rows older than the longest rule window on the sloppyd ticker; add a ledger check to `doctor`. *Satisfied: spend survives store reopen (contract test); pruning tested.*
-- [x] **Plan 14 — Phase-0 demand-validation kit (docs).** Write `docs/phase0/`: a kill-criteria comparison table vs Envoy AI Gateway / LiteLLM / Portkey / n8n / StackStorm; a 5-question discovery script; a target profile (lone platform eng at a 20–200-person AI co); and a demo script for the now-working inject→audit→tamper→replay→validate story. *Satisfied: docs committed. Human follow-up (flagged, not automatable): record the asciinema, recruit 3–5 design partners, lock Signal/Rule/Intent v0.1 after their feedback.*
-
-## NEXT (subsequent loop)
-LiteLLM real `/model/update` body + split per-gateway shapes + `//go:build integration` + docker-compose (LiteLLM+Ollama) · keyless docker-compose demo · `log/slog` structured logging · `throttle_tenant`/`disable_deployment` intents · capability manifest + graceful degrade + crash-boundary test · cut a signed **v0.1.0** (pin CI tools, coverage floor, SBOM + cosign).
+- [ ] **Plan 15 — Real LiteLLM admin body + per-gateway actuator split.** Today
+  `litellm`/`bifrost`/`envoy` share one `httpRouteActuator` body (`{model,to}`) that
+  would 422 against real LiteLLM. Split so each gateway owns its request shape; give
+  LiteLLM its documented `/model/update` schema (`model_name` + `litellm_params{model}`
+  + `model_info`); mark Bifrost/Envoy experimental in godoc. *Satisfied: per-gateway
+  httptest tests assert each body + all pass `actuator.Conformance`. (Live LiteLLM
+  verification lands with the Plan 19 integration test.)*
+- [ ] **Plan 16 — Structured logging (`log/slog`).** Thread a `*slog.Logger` from
+  `cmd/sloppyd` into engine + actuators (text for TTY, JSON via `--log-format=json`),
+  carrying intent-id, rule SHA, correlation-key, target, outcome on decision/error
+  paths; keep human stdout for the CLI. *Satisfied: engine `WithLogger` option
+  (no-op default) + a test asserting a handled signal emits a structured record
+  (slog test handler).*
+- [ ] **Plan 17 — `throttle_tenant` + `disable_deployment` intents.** Add the two
+  `core.ActionKind`s; implement on the LiteLLM actuator (per-key rate-limit / model
+  disable admin calls), reversible so TTL-revert + `rollback:on_clear` cover them;
+  extend `actuator.Conformance`; add an example rule (cost runaway → `throttle_tenant`
+  30m) + replay fixture; `rules validate` accepts them. *Satisfied: httptest tests for
+  both actions + conformance + validate.*
+- [ ] **Plan 18 — Registry graceful-degrade + crash-boundary test.** `registry.Apply`
+  hard-fails on an unknown kind; spec §11 promises graceful degrade. Make the registry
+  fall back (unsupported kind → `open_issue`/`page`) and have `doctor` report adapter
+  capabilities. Add a crash-boundary engine test: a Store that fails MarkReverted /
+  MarkIntentApplied *after* the actuator call → assert no double-apply on resume,
+  reverts stay pending + retry, and the `reverts_unmarked` / `state_write_failed`
+  metrics fire. *Satisfied: degrade test + crash-boundary test.*
+- [ ] **Plan 19 — docker-compose + integration test.** `docker-compose.yml`
+  (sloppyd + LiteLLM + Ollama + Redis) and a `//go:build integration` e2e test driving
+  a cost spike → reroute/revert against the live stack; README deploy section.
+  *Satisfied: `go build -tags integration ./...` compiles; compose validates
+  structurally (`docker compose config` when Docker is present); README updated.
+  Live run needs Docker — flagged, not run in the normal gate.*
+- [ ] **Plan 20 — Cut a trustworthy v0.1.0 (prep).** Pin CI tool versions (drop
+  `@latest` for golangci-lint + govulncheck), add a coverage floor to CI, extend
+  `.goreleaser.yaml` with syft SBOM + cosign keyless signing + SLSA provenance, bump
+  CHANGELOG `[Unreleased]` → `[0.1.0]`. *Satisfied: pinned versions runnable; goreleaser
+  config validates (`check` / `build --snapshot`); CHANGELOG updated. The tag/release
+  fires in CI on tag push — human step.*
 
 ## LATER (demand-gated)
-Richer signals (`eval.quality_regression`, `guardrail.tripped`) · approval gates over `ee/` RBAC · Prometheus `/metrics` · Store consistency docs · real-Redis integration job · parked YAGNI: OTLP traces, Postgres backend, Sigstore keyless, xDS/CRD Envoy.
+Richer signals (`eval.quality_regression`, `guardrail.tripped`) · approval gates over
+`ee/` RBAC · Prometheus `/metrics` · Store consistency docs · real-Redis integration job ·
+parked YAGNI: OTLP traces, Postgres backend, Sigstore (beyond cosign-in-release), xDS/CRD
+Envoy driver. **Highest-leverage non-code step: run the Phase-0 validation (`docs/phase0/`).**
