@@ -203,6 +203,7 @@ func cmdDoctor(args []string, out io.Writer) int {
 		doctor.CheckRules(*rulesPath),
 		doctor.CheckDB(*dbPath),
 		doctor.CheckLedger(*dbPath),
+		doctor.CheckActuators(buildRegistry(out).Kinds()),
 		doctor.CheckLiteLLM(os.Getenv("SLOPPY_LITELLM_URL")),
 	}
 	allOK := true

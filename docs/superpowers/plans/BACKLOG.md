@@ -32,7 +32,7 @@ checks it off, advances; stops when NOW is clear.
   extend `actuator.Conformance`; add an example rule (cost runaway → `throttle_tenant`
   30m) + replay fixture; `rules validate` accepts them. *Satisfied: httptest tests for
   both actions + conformance + validate.*
-- [ ] **Plan 18 — Registry graceful-degrade + crash-boundary test.** `registry.Apply`
+- [x] **Plan 18 — Registry graceful-degrade + crash-boundary test.** `registry.Apply`
   hard-fails on an unknown kind; spec §11 promises graceful degrade. Make the registry
   fall back (unsupported kind → `open_issue`/`page`) and have `doctor` report adapter
   capabilities. Add a crash-boundary engine test: a Store that fails MarkReverted /

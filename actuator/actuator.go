@@ -5,10 +5,20 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"time"
 
 	"github.com/sloppyjoe/sloppy/core"
 )
+
+// knownKind is the set of defined action kinds (for graceful-degrade decisions).
+var knownKind = func() map[core.ActionKind]bool {
+	m := map[core.ActionKind]bool{}
+	for _, k := range core.KnownActionKinds() {
+		m[k] = true
+	}
+	return m
+}()
 
 // Actuator executes (and can revert) one or more action kinds.
 type Actuator interface {
@@ -33,22 +43,66 @@ func (r *Registry) Register(a Actuator) {
 // Supports reports whether any actuator handles the kind.
 func (r *Registry) Supports(k core.ActionKind) bool { _, ok := r.byKind[k]; return ok }
 
-// Apply dispatches one intent.
+// Apply dispatches one intent. A known-but-unsupported kind gracefully degrades
+// to a notify fallback (open_issue/page) so the incident is escalated to a human
+// instead of silently failing (spec §11). Unknown kinds still error.
 func (r *Registry) Apply(ctx context.Context, i core.RemediationIntent) (core.Receipt, error) {
-	a, ok := r.byKind[i.Kind]
-	if !ok {
-		return core.Receipt{IntentID: i.ID, Outcome: core.OutcomeFailed}, fmt.Errorf("actuator: no actuator for kind %q", i.Kind)
+	if a, ok := r.byKind[i.Kind]; ok {
+		return a.Apply(ctx, i)
 	}
-	return a.Apply(ctx, i)
+	if a, fk, ok := r.fallback(i.Kind); ok {
+		return a.Apply(ctx, degrade(i, fk))
+	}
+	return core.Receipt{IntentID: i.ID, Outcome: core.OutcomeFailed}, fmt.Errorf("actuator: no actuator for kind %q (no fallback)", i.Kind)
 }
 
-// Revert dispatches a revert.
+// Revert dispatches a revert, degrading the same way as Apply.
 func (r *Registry) Revert(ctx context.Context, i core.RemediationIntent) (core.Receipt, error) {
-	a, ok := r.byKind[i.Kind]
-	if !ok {
-		return core.Receipt{IntentID: i.ID, Outcome: core.OutcomeFailed}, fmt.Errorf("actuator: no actuator for kind %q", i.Kind)
+	if a, ok := r.byKind[i.Kind]; ok {
+		return a.Revert(ctx, i)
 	}
-	return a.Revert(ctx, i)
+	if a, fk, ok := r.fallback(i.Kind); ok {
+		return a.Revert(ctx, degrade(i, fk))
+	}
+	return core.Receipt{IntentID: i.ID, Outcome: core.OutcomeFailed}, fmt.Errorf("actuator: no actuator for kind %q (no fallback)", i.Kind)
+}
+
+// fallback returns a notify actuator (open_issue, else page) to escalate a
+// known-but-unsupported kind. Unknown kinds get no fallback.
+func (r *Registry) fallback(k core.ActionKind) (Actuator, core.ActionKind, bool) {
+	if !knownKind[k] {
+		return nil, "", false
+	}
+	for _, fk := range []core.ActionKind{core.ActionOpenIssue, core.ActionPage} {
+		if a, ok := r.byKind[fk]; ok {
+			return a, fk, true
+		}
+	}
+	return nil, "", false
+}
+
+// degrade rewrites an intent to a fallback kind, recording the original kind
+// (without mutating the caller's Args map).
+func degrade(i core.RemediationIntent, fk core.ActionKind) core.RemediationIntent {
+	d := i
+	d.Kind = fk
+	na := make(map[string]any, len(i.Args)+1)
+	for k, v := range i.Args {
+		na[k] = v
+	}
+	na["degraded_from"] = string(i.Kind)
+	d.Args = na
+	return d
+}
+
+// Kinds returns all action kinds the registry can handle, sorted.
+func (r *Registry) Kinds() []core.ActionKind {
+	out := make([]core.ActionKind, 0, len(r.byKind))
+	for k := range r.byKind {
+		out = append(out, k)
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a] < out[b] })
+	return out
 }
 
 // Fake is a test actuator covering all kinds; counts calls and can inject errors.

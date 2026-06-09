@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sloppyjoe/sloppy/config"
+	"github.com/sloppyjoe/sloppy/core"
 	"github.com/sloppyjoe/sloppy/state"
 )
 
@@ -48,6 +50,18 @@ func CheckLedger(path string) Check {
 		return Check{"ledger", false, err.Error()}
 	}
 	return Check{"ledger", true, "usage store queryable"}
+}
+
+// CheckActuators reports which action kinds the registry can handle.
+func CheckActuators(kinds []core.ActionKind) Check {
+	if len(kinds) == 0 {
+		return Check{"actuators", false, "no actuators registered"}
+	}
+	names := make([]string, len(kinds))
+	for i, k := range kinds {
+		names[i] = string(k)
+	}
+	return Check{"actuators", true, fmt.Sprintf("%d kind(s): %s", len(kinds), strings.Join(names, ", "))}
 }
 
 // CheckLiteLLM probes a LiteLLM admin endpoint if configured.

@@ -8,6 +8,7 @@ import (
 	"github.com/sloppyjoe/sloppy/actuator"
 	"github.com/sloppyjoe/sloppy/core"
 	"github.com/sloppyjoe/sloppy/intent"
+	"github.com/sloppyjoe/sloppy/metrics"
 	"github.com/sloppyjoe/sloppy/rules"
 	"github.com/sloppyjoe/sloppy/state"
 )
@@ -97,6 +98,41 @@ func TestMarkRevertedFailureSurfaced(t *testing.T) {
 	}
 	if !auditHas(t, inner, "intent.revert_mark_failed") {
 		t.Fatal("expected intent.revert_mark_failed audit entry")
+	}
+}
+
+// A store whose MarkIntentApplied fails (after the actuator call) must surface
+// the lost idempotency write — at-most-once degrades to at-least-once on a crash
+// here, but it must never be silent.
+type markApplyFailStore struct {
+	state.Store
+}
+
+func (markApplyFailStore) MarkIntentApplied(context.Context, string) error { return errBoom }
+
+func TestMarkAppliedFailureSurfaced(t *testing.T) {
+	now := time.Unix(1749340800, 0).UTC()
+	rs, _ := rules.ParseRules([]byte(ttlRule))
+	rec, _ := rules.NewReconciler(rs)
+	inner, _ := state.OpenSQLite(t.TempDir() + "/ma.db")
+	defer inner.Close()
+	st := markApplyFailStore{Store: inner}
+	reg := actuator.NewRegistry()
+	f := &actuator.Fake{}
+	reg.Register(f)
+	m := metrics.New()
+	signer, _ := intent.NewEd25519Signer()
+	e := New(rec, reg, st, signer, WithMetrics(m), WithClock(func() time.Time { return now }))
+
+	res, _ := e.Handle(context.Background(), burnSig())
+	if countApplied(res) != 1 || f.Applied != 1 {
+		t.Fatalf("actuator should apply exactly once (applied=%d)", f.Applied)
+	}
+	if m.Snapshot()["state_write_failed"] != 1 {
+		t.Fatalf("state_write_failed metric must fire, got %d", m.Snapshot()["state_write_failed"])
+	}
+	if !auditHas(t, inner, "intent.mark_failed") {
+		t.Fatal("expected intent.mark_failed audit entry")
 	}
 }
 

@@ -18,6 +18,11 @@ const (
 	ActionDisableDeployment ActionKind = "disable_deployment"
 )
 
+// KnownActionKinds returns every defined action kind.
+func KnownActionKinds() []ActionKind {
+	return []ActionKind{ActionRouteOverride, ActionOpenIssue, ActionPage, ActionThrottleTenant, ActionDisableDeployment}
+}
+
 // RemediationIntent is a signed, reversible request to change the world.
 type RemediationIntent struct {
 	ID        string         `json:"id"`
