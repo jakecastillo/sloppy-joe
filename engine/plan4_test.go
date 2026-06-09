@@ -44,7 +44,12 @@ func (errStore) Outstanding(context.Context, string) ([]state.PendingRevert, err
 	return nil, errBoom
 }
 func (errStore) ClearOutstanding(context.Context, string) error { return errBoom }
-func (errStore) Close() error                                   { return nil }
+func (errStore) RecordUsage(context.Context, string, string, float64, time.Time) error {
+	return errBoom
+}
+func (errStore) SpendSince(context.Context, string, time.Time) (float64, error) { return 0, errBoom }
+func (errStore) PruneUsage(context.Context, time.Time) error                    { return errBoom }
+func (errStore) Close() error                                                   { return nil }
 
 func engineWithStore(st state.Store, opts ...Option) (*Engine, *actuator.Fake) {
 	rs, _ := rules.ParseRules([]byte(rule))

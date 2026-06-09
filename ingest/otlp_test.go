@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,7 +44,8 @@ func TestOTLPMetricsEndpointFeedsLedger(t *testing.T) {
 		t.Fatalf("otlp post: %v code=%v", err, resp.StatusCode)
 	}
 	// testServer price book: gpt-4o input 5/1k + output 15/1k → 1000+1000 toks = $20.
-	if got := l.Spend("acme", time.Hour, time.Now().UTC().Add(time.Second)); got < 19.9 {
+	got, _ := l.Spend(context.Background(), "acme", time.Hour, time.Now().UTC().Add(time.Second))
+	if got < 19.9 {
 		t.Fatalf("ledger should reflect ~$20 from OTLP, got %v", got)
 	}
 }

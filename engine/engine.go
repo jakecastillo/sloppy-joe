@@ -104,7 +104,7 @@ func (e *Engine) Handle(ctx context.Context, sig core.Signal) ([]Result, error) 
 	now := e.now()
 	var st map[string]any
 	if e.led != nil {
-		st = e.led.StateFor(sig.Subject.Tenant, now)
+		st, _ = e.led.StateFor(ctx, sig.Subject.Tenant, now)
 	}
 	var results []Result
 	for _, m := range e.rec.EvaluateMatches(sig, st) {
@@ -282,6 +282,11 @@ func (e *Engine) ProcessDueReverts(ctx context.Context, now time.Time) (int, err
 		n++
 	}
 	return n, nil
+}
+
+// PruneUsage deletes usage events older than `before` (called by the daemon ticker).
+func (e *Engine) PruneUsage(ctx context.Context, before time.Time) error {
+	return e.store.PruneUsage(ctx, before)
 }
 
 func auditDetail(i core.RemediationIntent) string {

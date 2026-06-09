@@ -202,6 +202,7 @@ func cmdDoctor(args []string, out io.Writer) int {
 	checks := []doctor.Check{
 		doctor.CheckRules(*rulesPath),
 		doctor.CheckDB(*dbPath),
+		doctor.CheckLedger(*dbPath),
 		doctor.CheckLiteLLM(os.Getenv("SLOPPY_LITELLM_URL")),
 	}
 	allOK := true

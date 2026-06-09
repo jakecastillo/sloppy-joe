@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -35,7 +36,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	reg := actuator.NewRegistry()
 	reg.Register(&actuator.Log{W: io.Discard})
 	signer, _ := intent.NewEd25519Signer()
-	l := ledger.New(ledger.PriceBook{"gpt-4o": {InputPer1K: 5, OutputPer1K: 15}})
+	l := ledger.New(ledger.PriceBook{"gpt-4o": {InputPer1K: 5, OutputPer1K: 15}}, st)
 	e := engine.New(rec, reg, st, signer, engine.WithLedger(l))
 	return NewServer(e, l), l
 }
@@ -75,7 +76,8 @@ func TestIngestUsageFeedsLedger(t *testing.T) {
 	if err != nil || resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("post usage: %v code=%v", err, resp.StatusCode)
 	}
-	if got := l.Spend("acme", time.Hour, time.Now().UTC().Add(time.Second)); got < 19.9 {
+	got, _ := l.Spend(context.Background(), "acme", time.Hour, time.Now().UTC().Add(time.Second))
+	if got < 19.9 {
 		t.Fatalf("ledger should reflect ~$20 spend, got %v", got)
 	}
 }

@@ -31,5 +31,8 @@ type Store interface {
 	RecordOutstanding(ctx context.Context, key string, r PendingRevert) error
 	Outstanding(ctx context.Context, key string) ([]PendingRevert, error)
 	ClearOutstanding(ctx context.Context, key string) error
+	RecordUsage(ctx context.Context, tenant, model string, cost float64, at time.Time) error
+	SpendSince(ctx context.Context, tenant string, since time.Time) (float64, error)
+	PruneUsage(ctx context.Context, before time.Time) error
 	Close() error
 }

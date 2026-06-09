@@ -1,9 +1,10 @@
-// Package ledger derives a priced cost ledger from token-usage events.
-// Cost is absent from the OTel GenAI semconv, so Sloppy Joe prices it itself.
+// Package ledger derives a priced cost ledger from token-usage events, persisted
+// behind a state.Store so spend survives restarts. Cost is absent from the OTel
+// GenAI semconv, so Sloppy Joe prices it itself.
 package ledger
 
 import (
-	"sync"
+	"context"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -27,55 +28,48 @@ func LoadPriceBook(b []byte) (PriceBook, error) {
 	return pb, nil
 }
 
-type usage struct {
-	tenant string
-	at     time.Time
-	cost   float64
+// UsageStore is the persistence the ledger needs (satisfied by state.Store).
+type UsageStore interface {
+	RecordUsage(ctx context.Context, tenant, model string, cost float64, at time.Time) error
+	SpendSince(ctx context.Context, tenant string, since time.Time) (float64, error)
 }
 
-// CostLedger accumulates priced token usage and answers windowed spend queries.
-// Estimated: pricing is best-effort from a static price book.
+// CostLedger prices token usage and persists/queries it via a UsageStore.
+// Spend is estimated (best-effort pricing from a static price book).
 type CostLedger struct {
-	mu     sync.Mutex
 	prices PriceBook
-	events []usage
+	store  UsageStore
 }
 
-// New builds a ledger with the given price book.
-func New(pb PriceBook) *CostLedger {
+// New builds a ledger over the given price book and persistence.
+func New(pb PriceBook, store UsageStore) *CostLedger {
 	if pb == nil {
 		pb = PriceBook{}
 	}
-	return &CostLedger{prices: pb}
+	return &CostLedger{prices: pb, store: store}
 }
 
-// Record prices a usage event (in/out token counts) and stores it.
-func (l *CostLedger) Record(tenant, model string, inTok, outTok int, at time.Time) {
+// Record prices a usage event (in/out token counts) and persists it.
+func (l *CostLedger) Record(ctx context.Context, tenant, model string, inTok, outTok int, at time.Time) error {
 	p := l.prices[model]
 	cost := float64(inTok)/1000*p.InputPer1K + float64(outTok)/1000*p.OutputPer1K
-	l.mu.Lock()
-	l.events = append(l.events, usage{tenant: tenant, at: at, cost: cost})
-	l.mu.Unlock()
+	return l.store.RecordUsage(ctx, tenant, model, cost, at)
 }
 
 // Spend returns total estimated $ for tenant within [now-window, now].
-func (l *CostLedger) Spend(tenant string, window time.Duration, now time.Time) float64 {
-	cutoff := now.Add(-window)
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	var sum float64
-	for _, e := range l.events {
-		if e.tenant == tenant && !e.at.Before(cutoff) && !e.at.After(now) {
-			sum += e.cost
-		}
-	}
-	return sum
+func (l *CostLedger) Spend(ctx context.Context, tenant string, window time.Duration, now time.Time) (float64, error) {
+	return l.store.SpendSince(ctx, tenant, now.Add(-window))
 }
 
 // StateFor returns CEL `state.*` fields for a tenant (estimated spend windows).
-func (l *CostLedger) StateFor(tenant string, now time.Time) map[string]any {
-	return map[string]any{
-		"spend_1h_usd":  l.Spend(tenant, time.Hour, now),
-		"spend_24h_usd": l.Spend(tenant, 24*time.Hour, now),
+func (l *CostLedger) StateFor(ctx context.Context, tenant string, now time.Time) (map[string]any, error) {
+	h, err := l.store.SpendSince(ctx, tenant, now.Add(-time.Hour))
+	if err != nil {
+		return nil, err
 	}
+	d, err := l.store.SpendSince(ctx, tenant, now.Add(-24*time.Hour))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"spend_1h_usd": h, "spend_24h_usd": d}, nil
 }

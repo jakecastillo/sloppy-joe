@@ -75,8 +75,12 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 
 func TestLedgerDrivesState(t *testing.T) {
 	now := time.Unix(1749340800, 0).UTC()
-	l := ledger.New(ledger.PriceBook{"gpt-4o": {InputPer1K: 5, OutputPer1K: 15}})
-	l.Record("acme", "gpt-4o", 1000, 1000, now) // $20 in the last hour
+	ls, _ := state.OpenSQLite(t.TempDir() + "/led.db")
+	defer ls.Close()
+	l := ledger.New(ledger.PriceBook{"gpt-4o": {InputPer1K: 5, OutputPer1K: 15}}, ls)
+	if err := l.Record(context.Background(), "acme", "gpt-4o", 1000, 1000, now); err != nil { // $20 in the last hour
+		t.Fatal(err)
+	}
 
 	e, f, st := mustEngine(t, `
 on: cost.budget_burn

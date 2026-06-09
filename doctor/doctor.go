@@ -2,6 +2,7 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -34,6 +35,19 @@ func CheckDB(path string) Check {
 	}
 	_ = st.Close()
 	return Check{"state-db", true, "opens + migrates ok"}
+}
+
+// CheckLedger verifies the cost-ledger usage store is queryable.
+func CheckLedger(path string) Check {
+	st, err := state.OpenSQLite(path)
+	if err != nil {
+		return Check{"ledger", false, err.Error()}
+	}
+	defer st.Close()
+	if _, err := st.SpendSince(context.Background(), "_doctor", time.Now().Add(-time.Hour)); err != nil {
+		return Check{"ledger", false, err.Error()}
+	}
+	return Check{"ledger", true, "usage store queryable"}
 }
 
 // CheckLiteLLM probes a LiteLLM admin endpoint if configured.

@@ -128,8 +128,8 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	for _, e := range events {
-		s.ledger.Record(e.tenant, e.model, e.input, e.output, now)
+	for _, ev := range events {
+		_ = s.ledger.Record(r.Context(), ev.tenant, ev.model, ev.input, ev.output, now)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)

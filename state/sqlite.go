@@ -25,7 +25,9 @@ CREATE INDEX IF NOT EXISTS idx_rule_actions ON rule_actions(rule_sha, ts);
 CREATE TABLE IF NOT EXISTS onclear (
   key TEXT, intent_id TEXT, kind TEXT, target TEXT, args TEXT,
   PRIMARY KEY(key, intent_id)
-);`
+);
+CREATE TABLE IF NOT EXISTS usage (tenant TEXT, model TEXT, cost REAL, ts TEXT);
+CREATE INDEX IF NOT EXISTS idx_usage ON usage(tenant, ts);`
 
 // OpenSQLite opens (and migrates) a SQLite-backed Store. Pure-Go driver (no cgo).
 //
@@ -180,6 +182,24 @@ func (s *sqliteStore) Outstanding(ctx context.Context, key string) ([]PendingRev
 
 func (s *sqliteStore) ClearOutstanding(ctx context.Context, key string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM onclear WHERE key=?`, key)
+	return err
+}
+
+func (s *sqliteStore) RecordUsage(ctx context.Context, tenant, model string, cost float64, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO usage(tenant,model,cost,ts) VALUES(?,?,?,?)`,
+		tenant, model, cost, at.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *sqliteStore) SpendSince(ctx context.Context, tenant string, since time.Time) (float64, error) {
+	var sum float64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(cost),0) FROM usage WHERE tenant=? AND ts>=?`,
+		tenant, since.UTC().Format(time.RFC3339Nano)).Scan(&sum)
+	return sum, err
+}
+
+func (s *sqliteStore) PruneUsage(ctx context.Context, before time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM usage WHERE ts<?`, before.UTC().Format(time.RFC3339Nano))
 	return err
 }
 

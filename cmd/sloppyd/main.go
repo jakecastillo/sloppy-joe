@@ -56,7 +56,7 @@ func buildEngine(rulesPath, dbPath, pricebookPath, keyPath, storeKind, redisAddr
 			return nil, nil, nil, nil, err
 		}
 	}
-	l := ledger.New(pb)
+	l := ledger.New(pb, st)
 	m := metrics.New()
 	reg := actuator.NewRegistry()
 	reg.Register(&actuator.Log{W: out})
@@ -88,9 +88,11 @@ func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.Cos
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if n, err := e.ProcessDueReverts(ctx, time.Now().UTC()); err == nil && n > 0 {
+				now := time.Now().UTC()
+				if n, err := e.ProcessDueReverts(ctx, now); err == nil && n > 0 {
 					fmt.Fprintf(out, "reverted %d expired intent(s)\n", n)
 				}
+				_ = e.PruneUsage(ctx, now.Add(-48*time.Hour))
 			}
 		}
 	}()
