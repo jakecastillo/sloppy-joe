@@ -1,16 +1,15 @@
-# Pin Go source to LF on every OS so gofmt and CI never trip on CRLF.
-# This repo is checked out on Windows with core.autocrlf=true and had no
-# .gitattributes, which made `gofmt -l` flag every .go file (the blobs are
-# already LF; only the working tree was CRLF) and fail the format gate.
-# Broader text/eol normalization is tracked as a follow-up.
-* text=auto
-*.go text eol=lf
+# Normalize line endings: LF in the repo AND the working tree. This is a Unix-first
+# project whose /bin/sh git hooks must stay LF even on Windows/OneDrive checkouts.
+* text=auto eol=lf
 
-# Binaries: never normalize.
+# Defensive explicit LF for shell + git hooks.
+*.sh        text eol=lf
+.githooks/* text eol=lf
+
+# Lockfile: keep as text, suppress diff noise.
+go.sum -diff
+
+# Future-proof binary assets.
 *.png binary
-*.jpg binary
-*.jpeg binary
-*.gif binary
-*.ico binary
-*.gz binary
+*.gz  binary
 *.zip binary

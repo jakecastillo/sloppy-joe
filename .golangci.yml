@@ -128,4 +128,15 @@ linters:
 
 formatters:
   enable:
-    - gofmt
+    - gofumpt
+    - gci
+  settings:
+    gofumpt:
+      module-path: github.com/sloppyjoe/sloppy
+      extra-rules: false
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/sloppyjoe/sloppy)
+      custom-order: true # REQUIRED for the section order above to be honored
