@@ -29,7 +29,7 @@ $ sloppyd --rules examples/rules
   🥪 sloppyd listening on :8723
 ```
 
-> The command is **`sloppy`** (`sloppy up`, `sloppy audit tail`). We avoided `joe` because it collides with the classic `joe` editor (Joe's Own Editor) on many Unix systems — the brand stays **Sloppy Joe**.
+> The command is **`sloppy`** (`sloppy init`, `sloppy audit tail`). We avoided `joe` because it collides with the classic `joe` editor (Joe's Own Editor) on many Unix systems — the brand stays **Sloppy Joe**.
 
 ## Status
 

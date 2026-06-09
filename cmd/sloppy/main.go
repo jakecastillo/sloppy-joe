@@ -25,10 +25,12 @@ import (
 
 func run(args []string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: sloppy <version|inject|rules|audit|test|doctor|config|platform|recipe>")
+		fmt.Fprintln(out, "usage: sloppy <init|version|inject|rules|audit|test|doctor|config|platform|recipe>")
 		return 2
 	}
 	switch args[0] {
+	case "init":
+		return cmdInit(args[1:], out)
 	case "version":
 		fmt.Fprintf(out, "sloppy %s\n", sloppyjoe.Version)
 		return 0
@@ -320,7 +322,7 @@ func cmdRules(args []string, out io.Writer) int {
 // merged config (never resolving secrets), `config validate` is an offline CI gate.
 func cmdConfig(args []string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: sloppy config <show|validate> [--config sloppy.yaml]")
+		fmt.Fprintln(out, "usage: sloppy config <show|validate|schema> [--config sloppy.yaml]")
 		return 2
 	}
 	sub := args[0]
@@ -365,6 +367,14 @@ func cmdConfig(args []string, out io.Writer) int {
 			return 1
 		}
 		fmt.Fprintln(out, "✓ config valid")
+		return 0
+	case "schema":
+		b, err := config.JSONSchema()
+		if err != nil {
+			fmt.Fprintf(out, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(out, string(b))
 		return 0
 	default:
 		fmt.Fprintf(out, "unknown config subcommand: %s\n", sub)

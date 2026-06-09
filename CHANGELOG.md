@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); this project is 
 
 ## [Unreleased]
 
+### Added
+- **Declarative configuration** (`sloppy.yaml`): one Git-reviewed source of truth for
+  both binaries, resolved with `flags > env > file > defaults` precedence and
+  per-field provenance. Read-only `sloppy config show` (effective merged config; never
+  resolves secrets), `config validate` (schema + enum + version + secret-lint — a CI
+  gate), and `config schema` (JSON Schema for editor autocomplete).
+- **`sloppy init`**: non-interactive, CI-safe scaffold (starter `sloppy.yaml` +
+  redacted `.env.sample` + signing key); no-clobber, `--force` to regenerate.
+- **Platform on/off from config**: a shared bootstrap builder constructs the actuator
+  registry + engine from the effective config — finally making the Bifrost, Envoy,
+  GitHub, and Slack actuators reachable (they existed but were unwired). `sloppy
+  platform list`; `doctor` reports enabled platforms + token presence (never values).
+- **Recipes**: a small curated set of configurable workflows (`cost-guard`,
+  `fallback-storm`, `latency-guard`) shipped as embedded YAML templates that render
+  through `ParseRules` into ordinary rules with a real content-hash SHA. `sloppy
+  recipe list/show`.
+
+### Changed
+- **Secret handling hardened**: the Slack actuator resolves its incoming-webhook URL
+  (a bearer credential) through the `SLOPPY_TOKEN_*` broker instead of inline; the
+  broker honors `SLOPPY_TOKEN_<CAP>_FILE` (e.g. `/run/secrets`); `docker-compose.yml`
+  no longer hardcodes a token.
+- **Fail-closed by default for mutating actuations** (behavior change): on a
+  state-store error, `route_override`/`throttle_tenant`/`disable_deployment` now fail
+  CLOSED (refuse) while `open_issue`/`page` stay fail-open. Tune per-capability via
+  `engine.fail_mode.{default,notify}`. The `engine.New` library default is unchanged
+  (fail-open); this applies to the config-driven daemon/CLI.
+
 ## [0.1.0] - 2026-06-08
 
 ### Added
