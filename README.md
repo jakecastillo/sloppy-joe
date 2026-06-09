@@ -11,8 +11,8 @@ A cost / eval / guardrail breach spawns a governed, capability-scoped, audited r
 ## What it feels like
 
 ```text
-# one-shot: run a signal through your rules (acts, then writes the audit)
-$ sloppy inject --rules examples/rules examples/signals/cost-spike.json
+# one-shot: run a signal through your rules now (acts, then writes the audit)
+$ sloppy inject --now --rules examples/rules examples/signals/cost-spike.json
   applied            route_override target=gpt-4o
   applied            page target=gpt-4o
 
@@ -131,7 +131,7 @@ go build -o bin/sloppy  ./cmd/sloppy
 go build -o bin/sloppyd ./cmd/sloppyd
 
 # fire a recorded signal through the example rules, then read the audit
-./bin/sloppy inject --rules examples/rules --db /tmp/sloppy.db examples/signals/cost-spike.json
+./bin/sloppy inject --now --rules examples/rules --db /tmp/sloppy.db examples/signals/cost-spike.json
 ./bin/sloppy audit tail --db /tmp/sloppy.db
 
 # or run the daemon and POST signals / usage over HTTP
@@ -144,6 +144,7 @@ curl localhost:8723/status
 - **State backend:** `sloppyd --store sqlite` (default) or `--store redis --redis-addr host:6379`.
 - **Auth:** `sloppyd --auth` with `SLOPPY_API_KEYS="key1=ingest:write,status:read"`.
 - **Gateway:** to wire a real LiteLLM admin API, set `SLOPPY_LITELLM_URL` and `SLOPPY_TOKEN_LITELLM`.
+- **`for:` windows:** one-shot `sloppy inject --now` fires immediately; the `sloppyd` daemon evaluates `for:` windows across the live signal stream.
 
 ## Principles
 
