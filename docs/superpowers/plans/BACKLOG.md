@@ -1,13 +1,22 @@
-# Sloppy Joe — Post-v0 Plan Backlog (ralph loop)
+# Sloppy Joe — Plan Backlog (ralph loop)
 
-Each plan is implemented with TDD and is **satisfied completely** only when:
-`gofmt` clean · `go vet ./...` clean · `go test ./...` green · both binaries build · committed.
+**Done:** Plans 1–8 (v0 + post-v0), quality audit (3 rounds), CI/CD — see CHANGELOG + git history.
 
-The ralph loop takes the next unchecked plan, finishes it to that bar, checks it off, and advances. When all are checked, the loop stops.
+A 5-lens planning pass (2026-06-08, see `2026-06-08-roadmap.md`) found the headline demo + governance were broken/dead while surrounding engineering was strong. This backlog fixes *the product*, then validates demand.
 
-- [x] **Plan 5 — OTLP metrics ingest → ledger.** `POST /v1/otlp/metrics` accepting OTLP/JSON metrics that carry gen_ai token usage; map data points (token type / tenant / model / value) into `ledger.Record`. Test by posting a crafted OTLP/JSON doc and asserting ledger spend. *Satisfied: parser + endpoint tested; ledger reflects usage.*
-- [x] **Plan 6 — Redis state backend.** `state.OpenRedis(addr)` implementing the same `state.Store` contract (applied-intent idempotency, hash-chained audit, pending reverts) on Redis. Shared contract test runs against both SQLite and Redis (via `miniredis`). *Satisfied: both backends pass one shared Store contract test.*
-- [x] **Plan 7 — Bifrost + Envoy actuators.** `actuator/bifrost.go` + `actuator/envoy.go` implementing `route_override` against their admin APIs (httptest-mocked), each run through `actuator.Conformance`. *Satisfied: both adapters tested + conformant.*
-- [x] **Plan 8 — enterprise auth shim (`ee/`).** API-key RBAC middleware (capability scopes, e.g. `ingest:write`, `status:read`) wrapping the ingest handler; keys→scopes from env. Optional `sloppyd --auth`. *Satisfied: allow/deny middleware tested; wired behind a flag.*
+Each plan is **satisfied completely** only when: `gofmt` clean · `go vet` clean · `golangci-lint` 0 issues · `go test ./...` green · binaries build · committed. The loop takes the next unchecked plan in order (dependency-sequenced), finishes it to that bar, checks it off, advances; stops when NOW is clear.
 
-Post-backlog horizon (not in this loop): real OTLP traces, Sigstore keyless signing, Postgres backend, full multi-tenant, Phase-0 design-partner validation.
+## NOW (this loop)
+
+- [ ] **Plan 9 — Fix the flagship demo.** `sloppy inject` with the example `for: 5m` rule never fires (each CLI run builds a fresh engine → the in-process for-window can never be satisfied) and writes an empty audit chain — contradicting the README. Add a `--now` flag to `sloppy inject` that bypasses the for-window for one explicit injection; add `examples/rules/cost-guard-demo.yaml` (no `for:`); reconcile the README quickstart with reality. *Satisfied: a `cmd/sloppy` test asserts `inject --now` prints `applied route_override` and `audit tail` shows a verified multi-entry chain.*
+- [ ] **Plan 10 — `sloppy rules validate <dir>`.** Zero-infra CI gate promised by spec §15 but missing. Load rules via `config.LoadRules`, CEL-compile every `when`, type-check action kinds against `core.ActionKind`, validate `intent_budget` syntax, emit line-level errors, non-zero exit on failure. *Satisfied: tests for a valid dir (exit 0) and an invalid dir (exit≠0, names the file); README CI snippet added.*
+- [ ] **Plan 11 — Enforce `intent_budget` + `rollback: on_clear`.** Both are parsed (`rules/rule.go`) but never enforced (dead config; the README rule's `intent_budget: 3/h` no-ops). Enforce a per-(ruleSHA,window) budget in `engine.applyIntent` (new `OutThrottled` outcome + audit + metric on exceed); implement `rollback: on_clear` (revert a rule's outstanding intents when it stops matching on a later tick); add decorrelated jitter to actuator retries. *Satisfied: tests assert throttle past budget + an on-clear revert.*
+- [ ] **Plan 12 — Thread `context.Context` through `state.Store` + bound Redis keys.** Add `ctx` as the first param to every Store method; thread from engine + ingest; SQLite `*Context` variants; Redis uses the passed ctx (replace the `context.Background()` sites); add `EXPIRE`/TTL to the applied-intents set (bounded retention ≫ longest revert TTL). *Satisfied: contract test uses `t.Context()`; a retention-bounded assertion; all green.* **(Do before Plan 13 — changes every Store signature.)**
+- [ ] **Plan 13 — Persist + bound the cost ledger behind `state.Store`.** Ledger is in-memory/unbounded/resets on restart (contradicts the architecture diagram). Add `RecordUsage`/`SpendSince` to `state.Store` (SQLite usage table indexed on (tenant,at); Redis per-tenant sorted-set by ts); `ledger.CostLedger` becomes the pricing layer over the store; prune rows older than the longest rule window on the sloppyd ticker; add a ledger check to `doctor`. *Satisfied: spend survives store reopen (contract test); pruning tested.*
+- [ ] **Plan 14 — Phase-0 demand-validation kit (docs).** Write `docs/phase0/`: a kill-criteria comparison table vs Envoy AI Gateway / LiteLLM / Portkey / n8n / StackStorm; a 5-question discovery script; a target profile (lone platform eng at a 20–200-person AI co); and a demo script for the now-working inject→audit→tamper→replay→validate story. *Satisfied: docs committed. Human follow-up (flagged, not automatable): record the asciinema, recruit 3–5 design partners, lock Signal/Rule/Intent v0.1 after their feedback.*
+
+## NEXT (subsequent loop)
+LiteLLM real `/model/update` body + split per-gateway shapes + `//go:build integration` + docker-compose (LiteLLM+Ollama) · keyless docker-compose demo · `log/slog` structured logging · `throttle_tenant`/`disable_deployment` intents · capability manifest + graceful degrade + crash-boundary test · cut a signed **v0.1.0** (pin CI tools, coverage floor, SBOM + cosign).
+
+## LATER (demand-gated)
+Richer signals (`eval.quality_regression`, `guardrail.tripped`) · approval gates over `ee/` RBAC · Prometheus `/metrics` · Store consistency docs · real-Redis integration job · parked YAGNI: OTLP traces, Postgres backend, Sigstore keyless, xDS/CRD Envoy.
