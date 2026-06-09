@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sloppyjoe/sloppy/bootstrap"
+	"github.com/sloppyjoe/sloppy/config"
 	"github.com/sloppyjoe/sloppy/ee"
 )
 
@@ -28,7 +30,12 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), "sqlite", "", false, io.Discard, slog.New(slog.DiscardHandler))
+	eff := config.Resolve(config.File{
+		Rules:  []string{rulesDir},
+		Store:  config.StoreConfig{Kind: "sqlite", Path: filepath.Join(dir, "d.db")},
+		Engine: config.EngineConfig{SigningKey: filepath.Join(dir, "k.key")},
+	}, true, config.FlagOverrides{}, func(string) string { return "" })
+	e, l, m, cleanup, err := bootstrap.BuildEngine(eff, io.Discard, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +103,12 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e, l, m, cleanup, err := buildEngine(rulesDir, filepath.Join(dir, "d.db"), "", filepath.Join(dir, "k.key"), "sqlite", "", false, io.Discard, slog.New(slog.DiscardHandler))
+	eff := config.Resolve(config.File{
+		Rules:  []string{rulesDir},
+		Store:  config.StoreConfig{Kind: "sqlite", Path: filepath.Join(dir, "d.db")},
+		Engine: config.EngineConfig{SigningKey: filepath.Join(dir, "k.key")},
+	}, true, config.FlagOverrides{}, func(string) string { return "" })
+	e, l, m, cleanup, err := bootstrap.BuildEngine(eff, io.Discard, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

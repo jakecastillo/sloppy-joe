@@ -131,7 +131,9 @@ func applyDefaults(f *File) {
 		f.Engine.LogFormat = "text"
 	}
 	if f.Engine.FailMode.Default == "" {
-		f.Engine.FailMode.Default = "closed"
+		// Behavior-preserving default (fail-open). Phase D flips this to fail-closed
+		// for mutating actions together with the per-capability engine enforcement.
+		f.Engine.FailMode.Default = "open"
 	}
 	if f.Engine.FailMode.Notify == "" {
 		f.Engine.FailMode.Notify = "open"

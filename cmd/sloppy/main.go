@@ -7,22 +7,23 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 
 	sloppyjoe "github.com/sloppyjoe/sloppy"
 	"github.com/sloppyjoe/sloppy/actuator"
+	"github.com/sloppyjoe/sloppy/bootstrap"
 	"github.com/sloppyjoe/sloppy/config"
 	"github.com/sloppyjoe/sloppy/doctor"
 	"github.com/sloppyjoe/sloppy/engine"
 	"github.com/sloppyjoe/sloppy/intent"
 	"github.com/sloppyjoe/sloppy/replay"
 	"github.com/sloppyjoe/sloppy/rules"
-	"github.com/sloppyjoe/sloppy/secrets"
 	"github.com/sloppyjoe/sloppy/state"
 )
 
 func run(args []string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: sloppy <version|inject|rules|audit|test|doctor|config>")
+		fmt.Fprintln(out, "usage: sloppy <version|inject|rules|audit|test|doctor|config|platform>")
 		return 2
 	}
 	switch args[0] {
@@ -41,6 +42,8 @@ func run(args []string, out io.Writer) int {
 		return cmdDoctor(args[1:], out)
 	case "config":
 		return cmdConfig(args[1:], out)
+	case "platform":
+		return cmdPlatform(args[1:], out)
 	default:
 		fmt.Fprintf(out, "unknown command: %s\n", args[0])
 		return 2
@@ -52,6 +55,7 @@ func cmdInject(args []string, out io.Writer) int {
 	fs.SetOutput(out)
 	rulesPath := fs.String("rules", "rules", "rules dir or file")
 	dbPath := fs.String("db", "sloppy.db", "sqlite db path")
+	cfgPath := fs.String("config", "sloppy.yaml", "path to sloppy.yaml (platform wiring)")
 	now := fs.Bool("now", false, "fire matching rules immediately, bypassing for: windows (one-shot)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -91,7 +95,12 @@ func cmdInject(args []string, out io.Writer) int {
 	if *now {
 		opts = append(opts, engine.WithImmediate())
 	}
-	e := engine.New(rec, buildRegistry(out), st, signer, opts...)
+	reg, err := registryFromConfig(*cfgPath, out)
+	if err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	e := engine.New(rec, reg, st, signer, opts...)
 	results, _ := e.Handle(context.Background(), sig)
 	if len(results) == 0 {
 		fmt.Fprintln(out, "🥪 no rule fired for this signal")
@@ -135,17 +144,16 @@ func cmdAudit(args []string, out io.Writer) int {
 	return 0
 }
 
-// buildRegistry uses a logging actuator by default (demo without a live gateway);
-// if SLOPPY_LITELLM_URL is set, route_override is wired to a real LiteLLM admin API
-// using a token from the secret broker (SLOPPY_TOKEN_LITELLM).
-func buildRegistry(out io.Writer) *actuator.Registry {
-	reg := actuator.NewRegistry()
-	reg.Register(&actuator.Log{W: out})
-	if url := os.Getenv("SLOPPY_LITELLM_URL"); url != "" {
-		br := secrets.NewEnvBroker([]string{"litellm"})
-		reg.Register(actuator.NewLiteLLM(url, func() (string, error) { return br.Get("litellm") }))
+// registryFromConfig builds the actuator registry from sloppy.yaml (zero-config if
+// absent) plus the environment, via the shared bootstrap builder — the same wiring
+// sloppyd uses, so the CLI and daemon agree on which platforms are enabled.
+func registryFromConfig(cfgPath string, out io.Writer) (*actuator.Registry, error) {
+	f, existed, err := config.LoadFile(cfgPath)
+	if err != nil {
+		return nil, err
 	}
-	return reg
+	eff := config.Resolve(f, existed, config.FlagOverrides{}, os.Getenv)
+	return bootstrap.BuildRegistry(eff, out)
 }
 
 // cmdTest deterministically replays a JSONL fixture of signals against the rules
@@ -198,15 +206,25 @@ func cmdDoctor(args []string, out io.Writer) int {
 	fs.SetOutput(out)
 	rulesPath := fs.String("rules", "rules", "rules dir or file")
 	dbPath := fs.String("db", "sloppy.db", "sqlite db path")
+	cfgPath := fs.String("config", "sloppy.yaml", "path to sloppy.yaml")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	f, existed, _ := config.LoadFile(*cfgPath)
+	eff := config.Resolve(f, existed, config.FlagOverrides{}, os.Getenv)
+	litellmURL := ""
+	if p, ok := eff.Platforms["litellm"]; ok {
+		litellmURL = p.URL
 	}
 	checks := []doctor.Check{
 		doctor.CheckRules(*rulesPath),
 		doctor.CheckDB(*dbPath),
 		doctor.CheckLedger(*dbPath),
-		doctor.CheckActuators(buildRegistry(out).Kinds()),
-		doctor.CheckLiteLLM(os.Getenv("SLOPPY_LITELLM_URL")),
+		doctor.CheckPlatforms(eff),
+		doctor.CheckLiteLLM(litellmURL),
+	}
+	if reg, err := bootstrap.BuildRegistry(eff, out); err == nil {
+		checks = append(checks, doctor.CheckActuators(reg.Kinds()))
 	}
 	allOK := true
 	for _, c := range checks {
@@ -300,6 +318,53 @@ func cmdConfig(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "unknown config subcommand: %s\n", sub)
 		return 2
 	}
+}
+
+// cmdPlatform lists configured platforms: enabled/disabled, whether a token is
+// present (name/presence only, never the value), and experimental status.
+func cmdPlatform(args []string, out io.Writer) int {
+	if len(args) == 0 || args[0] != "list" {
+		fmt.Fprintln(out, "usage: sloppy platform list [--config sloppy.yaml]")
+		return 2
+	}
+	fs := flag.NewFlagSet("platform list", flag.ContinueOnError)
+	fs.SetOutput(out)
+	cfgPath := fs.String("config", "sloppy.yaml", "path to sloppy.yaml")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	f, existed, err := config.LoadFile(*cfgPath)
+	if err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	eff := config.Resolve(f, existed, config.FlagOverrides{}, os.Getenv)
+	names := make([]string, 0, len(eff.Platforms))
+	for n := range eff.Platforms {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		fmt.Fprintln(out, "no platforms configured (Log actuator only)")
+		return 0
+	}
+	for _, n := range names {
+		p := eff.Platforms[n]
+		status := "disabled"
+		if p.Enabled {
+			status = "enabled"
+		}
+		tok := "no-token"
+		if p.TokenEnv != "" && (os.Getenv(p.TokenEnv) != "" || os.Getenv(p.TokenEnv+"_FILE") != "") {
+			tok = "token-present"
+		}
+		exp := ""
+		if p.Experimental {
+			exp = " (experimental)"
+		}
+		fmt.Fprintf(out, "%-9s %-9s %s%s\n", n, status, tok, exp)
+	}
+	return 0
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout)) }

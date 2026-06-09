@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,6 +64,31 @@ func CheckActuators(kinds []core.ActionKind) Check {
 		names[i] = string(k)
 	}
 	return Check{"actuators", true, fmt.Sprintf("%d kind(s): %s", len(kinds), strings.Join(names, ", "))}
+}
+
+// CheckPlatforms reports which platforms are enabled and whether their token_env
+// (or its *_FILE form) is present. It NEVER prints a token value.
+func CheckPlatforms(eff config.Effective) Check {
+	var enabled, missing []string
+	for name, p := range eff.Platforms {
+		if !p.Enabled {
+			continue
+		}
+		enabled = append(enabled, name)
+		if p.TokenEnv != "" && os.Getenv(p.TokenEnv) == "" && os.Getenv(p.TokenEnv+"_FILE") == "" {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(enabled)
+	sort.Strings(missing)
+	if len(enabled) == 0 {
+		return Check{"platforms", true, "none enabled (Log only)"}
+	}
+	if len(missing) > 0 {
+		return Check{"platforms", false, fmt.Sprintf("enabled: %s; missing token: %s",
+			strings.Join(enabled, ", "), strings.Join(missing, ", "))}
+	}
+	return Check{"platforms", true, fmt.Sprintf("enabled: %s (tokens present)", strings.Join(enabled, ", "))}
 }
 
 // CheckLiteLLM probes a LiteLLM admin endpoint if configured.

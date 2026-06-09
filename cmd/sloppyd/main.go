@@ -5,7 +5,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,64 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sloppyjoe/sloppy/actuator"
+	"github.com/sloppyjoe/sloppy/bootstrap"
 	"github.com/sloppyjoe/sloppy/config"
 	"github.com/sloppyjoe/sloppy/ee"
 	"github.com/sloppyjoe/sloppy/engine"
 	"github.com/sloppyjoe/sloppy/ingest"
-	"github.com/sloppyjoe/sloppy/intent"
 	"github.com/sloppyjoe/sloppy/ledger"
 	"github.com/sloppyjoe/sloppy/metrics"
-	"github.com/sloppyjoe/sloppy/rules"
-	"github.com/sloppyjoe/sloppy/secrets"
 )
-
-// buildEngine wires the loop from on-disk config. Returns a cleanup closer.
-func buildEngine(rulesPath, dbPath, pricebookPath, keyPath, storeKind, redisAddr string, failClosed bool, out io.Writer, logger *slog.Logger) (*engine.Engine, *ledger.CostLedger, *metrics.Registry, func(), error) {
-	rs, err := config.LoadRules(rulesPath)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	rec, err := rules.NewReconciler(rs)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	st, err := config.OpenStore(storeKind, dbPath, redisAddr)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	signer, err := intent.LoadOrCreateSigner(keyPath)
-	if err != nil {
-		st.Close()
-		return nil, nil, nil, nil, err
-	}
-	var pb ledger.PriceBook
-	if pricebookPath != "" {
-		b, err := os.ReadFile(pricebookPath)
-		if err != nil {
-			st.Close()
-			return nil, nil, nil, nil, err
-		}
-		if pb, err = ledger.LoadPriceBook(b); err != nil {
-			st.Close()
-			return nil, nil, nil, nil, err
-		}
-	}
-	l := ledger.New(pb, st)
-	m := metrics.New()
-	reg := actuator.NewRegistry()
-	reg.Register(&actuator.Log{W: out})
-	if url := os.Getenv("SLOPPY_LITELLM_URL"); url != "" {
-		br := secrets.NewEnvBroker([]string{"litellm"})
-		reg.Register(actuator.NewLiteLLM(url, func() (string, error) { return br.Get("litellm") }))
-	}
-	fm := engine.FailOpen
-	if failClosed {
-		fm = engine.FailClosed
-	}
-	e := engine.New(rec, reg, st, signer, engine.WithLedger(l), engine.WithMetrics(m), engine.WithFailMode(fm), engine.WithLogger(logger))
-	return e, l, m, func() { st.Close() }, nil
-}
 
 // serve runs the ingest HTTP server + the TTL-revert ticker until ctx is cancelled.
 func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.CostLedger, m *metrics.Registry, authz *ee.Authorizer, revertEvery time.Duration, logger *slog.Logger) error {
@@ -113,6 +62,7 @@ func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.Cos
 }
 
 func main() {
+	cfgPath := flag.String("config", "sloppy.yaml", "path to sloppy.yaml")
 	addr := flag.String("addr", ":8723", "listen address")
 	rulesPath := flag.String("rules", "rules", "rules dir or file")
 	dbPath := flag.String("db", "sloppy.db", "sqlite db path")
@@ -123,35 +73,85 @@ func main() {
 	store := flag.String("store", "sqlite", "state backend: sqlite|redis")
 	redisAddr := flag.String("redis-addr", "", "redis address host:port (when --store=redis)")
 	logFormat := flag.String("log-format", "text", "log format: text|json")
-	revertEvery := flag.Duration("revert-interval", 30*time.Second, "TTL revert scan interval")
+	revertEvery := flag.String("revert-interval", "30s", "TTL revert scan interval")
 	flag.Parse()
 
+	// Only flags the user explicitly set become overrides (precedence: flag > env > file).
+	set := map[string]bool{}
+	flag.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
+	ov := config.FlagOverrides{}
+	if set["addr"] {
+		ov.Addr = addr
+	}
+	if set["rules"] {
+		ov.Rules = rulesPath
+	}
+	if set["db"] {
+		ov.DBPath = dbPath
+	}
+	if set["pricebook"] {
+		ov.Pricebook = pricebookPath
+	}
+	if set["key"] {
+		ov.SigningKey = keyPath
+	}
+	if set["store"] {
+		ov.Store = store
+	}
+	if set["redis-addr"] {
+		ov.RedisAddr = redisAddr
+	}
+	if set["log-format"] {
+		ov.LogFormat = logFormat
+	}
+	if set["revert-interval"] {
+		ov.RevertInterval = revertEvery
+	}
+	if set["fail-closed"] {
+		ov.FailClosed = failClosed
+	}
+	if set["auth"] {
+		ov.Auth = authOn
+	}
+
+	f, existed, err := config.LoadFile(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config:", err)
+		os.Exit(1)
+	}
+	eff := config.Resolve(f, existed, ov, os.Getenv)
+
 	var lh slog.Handler = slog.NewTextHandler(os.Stdout, nil)
-	if *logFormat == "json" {
+	if eff.Engine.LogFormat == "json" {
 		lh = slog.NewJSONHandler(os.Stdout, nil)
 	}
 	logger := slog.New(lh)
 
 	var authz *ee.Authorizer
-	if *authOn {
+	if eff.Auth.Enabled {
 		authz = ee.LoadFromEnv()
 	}
 
-	e, l, m, cleanup, err := buildEngine(*rulesPath, *dbPath, *pricebookPath, *keyPath, *store, *redisAddr, *failClosed, os.Stdout, logger)
+	e, l, m, cleanup, err := bootstrap.BuildEngine(eff, os.Stdout, logger)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 	defer cleanup()
 
-	ln, err := net.Listen("tcp", *addr)
+	revertEveryDur, err := eff.RevertInterval()
+	if err != nil {
+		revertEveryDur = 30 * time.Second
+	}
+
+	ln, err := net.Listen("tcp", eff.Server.Addr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "listen:", err)
 		os.Exit(1)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := serve(ctx, ln, e, l, m, authz, *revertEvery, logger); err != nil {
+	if err := serve(ctx, ln, e, l, m, authz, revertEveryDur, logger); err != nil {
 		fmt.Fprintln(os.Stderr, "serve:", err)
 		os.Exit(1)
 	}

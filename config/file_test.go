@@ -19,7 +19,7 @@ func TestLoadFileMissingReturnsDefaults(t *testing.T) {
 	if len(f.Rules) != 1 || f.Rules[0] != "rules" {
 		t.Fatalf("default rules wrong: %v", f.Rules)
 	}
-	if f.Engine.FailMode.Default != "closed" || f.Engine.FailMode.Notify != "open" {
+	if f.Engine.FailMode.Default != "open" || f.Engine.FailMode.Notify != "open" {
 		t.Fatalf("default fail_mode wrong: %+v", f.Engine.FailMode)
 	}
 }

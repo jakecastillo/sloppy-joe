@@ -38,7 +38,10 @@ services:
     ports: ["8723:8723"]
     environment:
       SLOPPY_LITELLM_URL: http://litellm:4000
-      SLOPPY_TOKEN_LITELLM: sk-sloppy-dev
+      # Secret indirection (no live token committed): resolved from the host env /
+      # .env file with a throwaway dev fallback. In production prefer the broker's
+      # file form, SLOPPY_TOKEN_LITELLM_FILE, pointing at a mounted /run/secrets file.
+      SLOPPY_TOKEN_LITELLM: ${SLOPPY_TOKEN_LITELLM:-sk-sloppy-dev}
     command:
       - "--addr"
       - ":8723"
