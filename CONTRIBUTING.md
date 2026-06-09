@@ -45,7 +45,9 @@ Significant changes should start from a short spec there.
 
 ## Commits
 
-Conventional-commit style (`feat:`, `fix:`, `refactor:`, `docs:`, `ci:`). Small, focused commits.
+[**Conventional Commits**](docs/conventional-commits.md) — `type(scope): description`
+(e.g. `feat(engine): enforce intent_budget`). Small, focused commits. Enforced by
+the `commit-msg` hook (`make hooks`) and the `Commit Lint` check on PRs.
 **Sign off every commit** for the DCO (`git commit -s`) — see below.
 
 ## License & the DCO
