@@ -1,6 +1,14 @@
 #!/bin/sh
-# Enforce Conventional Commits on the subject line.
+# Enforce Conventional Commits + forbid AI co-author/generated-by trailers.
 # Docs: docs/conventional-commits.md  ·  installed via `make hooks`.
+
+# This project does not attribute commits to AI tools.
+if grep -Eiq '^co-authored-by:[[:space:]]*claude|claude\.com/claude-code|^🤖[[:space:]]*generated with' "$1"; then
+	echo "✗ remove the AI co-author / generated-by trailer from the commit message." >&2
+	echo "  (see CONTRIBUTING.md — commits here are not attributed to AI tools)" >&2
+	exit 1
+fi
+
 subject=$(head -n1 "$1")
 
 # Let merges, reverts, and autosquash commits through untouched.

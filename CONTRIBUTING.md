@@ -50,6 +50,10 @@ Significant changes should start from a short spec there.
 the `commit-msg` hook (`make hooks`) and the `Commit Lint` check on PRs.
 **Sign off every commit** for the DCO (`git commit -s`) — see below.
 
+Commits are **not** attributed to AI tools: no `Co-Authored-By` / generated-by
+trailers. The `commit-msg` hook and CI reject them, and Claude Code is configured
+with `includeCoAuthoredBy: false` (`.claude/settings.json`).
+
 ## License & the DCO
 
 Sloppy Joe is licensed under the [Apache License 2.0](LICENSE). Contributions are

@@ -25,6 +25,10 @@ jobs:
               echo "::error::Non-conventional commit $sha: $subject"
               fail=1
             fi
+            if git log -1 --format=%B "$sha" | grep -Eiq '^co-authored-by:[[:space:]]*claude|claude\.com/claude-code|^🤖[[:space:]]*generated with'; then
+              echo "::error::AI co-author/generated-by trailer in $sha — remove it"
+              fail=1
+            fi
           done
           if [ "$fail" -ne 0 ]; then
             echo "See docs/conventional-commits.md"
