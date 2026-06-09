@@ -22,7 +22,7 @@ import (
 
 func run(args []string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: sloppy <version|inject|rules|audit|test|doctor>")
+		fmt.Fprintln(out, "usage: sloppy <version|inject|rules|audit|test|doctor|config>")
 		return 2
 	}
 	switch args[0] {
@@ -39,6 +39,8 @@ func run(args []string, out io.Writer) int {
 		return cmdTest(args[1:], out)
 	case "doctor":
 		return cmdDoctor(args[1:], out)
+	case "config":
+		return cmdConfig(args[1:], out)
 	default:
 		fmt.Fprintf(out, "unknown command: %s\n", args[0])
 		return 2
@@ -248,6 +250,56 @@ func cmdRules(args []string, out io.Writer) int {
 	}
 	fmt.Fprintf(out, "✓ %d rule(s) valid\n", len(rs))
 	return 0
+}
+
+// cmdConfig is the read-only config surface: `config show` renders the effective
+// merged config (never resolving secrets), `config validate` is an offline CI gate.
+func cmdConfig(args []string, out io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(out, "usage: sloppy config <show|validate> [--config sloppy.yaml]")
+		return 2
+	}
+	sub := args[0]
+	fs := flag.NewFlagSet("config "+sub, flag.ContinueOnError)
+	fs.SetOutput(out)
+	cfgPath := fs.String("config", "sloppy.yaml", "path to sloppy.yaml")
+	prov := fs.Bool("provenance", false, "annotate `config show` with value sources")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	switch sub {
+	case "show":
+		f, existed, err := config.LoadFile(*cfgPath)
+		if err != nil {
+			fmt.Fprintf(out, "error: %v\n", err)
+			return 1
+		}
+		eff := config.Resolve(f, existed, config.FlagOverrides{}, os.Getenv)
+		if err := config.RenderEffective(out, eff, *prov); err != nil {
+			fmt.Fprintf(out, "error: %v\n", err)
+			return 1
+		}
+		return 0
+	case "validate":
+		f, _, err := config.LoadFile(*cfgPath)
+		if err != nil {
+			fmt.Fprintf(out, "✗ %v\n", err)
+			return 1
+		}
+		probs := config.Validate(f)
+		for _, p := range probs {
+			fmt.Fprintf(out, "✗ %s\n", p)
+		}
+		if len(probs) > 0 {
+			fmt.Fprintf(out, "%d problem(s)\n", len(probs))
+			return 1
+		}
+		fmt.Fprintln(out, "✓ config valid")
+		return 0
+	default:
+		fmt.Fprintf(out, "unknown config subcommand: %s\n", sub)
+		return 2
+	}
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout)) }
