@@ -13,6 +13,10 @@ import (
 type sqliteStore struct {
 	db     *sql.DB
 	signer CheckpointSigner // optional; when set, AppendAudit maintains a signed checkpoint
+	// requireCheckpoint forces VerifyAudit to enforce checkpoint presence even when
+	// signer is nil (verify-only auditor that holds no private key). See
+	// WithRequireCheckpoint.
+	requireCheckpoint bool
 }
 
 const schema = `
@@ -53,7 +57,7 @@ func OpenSQLite(path string, opts ...StoreOption) (Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
-	return &sqliteStore{db: db, signer: cfg.checkpointSigner}, nil
+	return &sqliteStore{db: db, signer: cfg.checkpointSigner, requireCheckpoint: cfg.requireCheckpoint}, nil
 }
 
 // ClaimIntent inserts the idempotency key in one statement. A plain INSERT (not
@@ -158,7 +162,7 @@ func (s *sqliteStore) VerifyAudit(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	return VerifyAgainstCheckpoint(es, cp, found, s.signer != nil)
+	return VerifyAgainstCheckpoint(es, cp, found, s.signer != nil || s.requireCheckpoint)
 }
 
 // loadCheckpoint reads the persisted signed checkpoint (found==false when none

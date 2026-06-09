@@ -27,6 +27,10 @@ const (
 type redisStore struct {
 	c      *redis.Client
 	signer CheckpointSigner // optional; when set, AppendAudit maintains a signed checkpoint
+	// requireCheckpoint forces VerifyAudit to enforce checkpoint presence even when
+	// signer is nil (verify-only auditor that holds no private key). See
+	// WithRequireCheckpoint.
+	requireCheckpoint bool
 }
 
 // OpenRedis returns a Redis-backed Store (multi-replica capable). Same contract as SQLite.
@@ -36,7 +40,7 @@ func OpenRedis(addr string, opts ...StoreOption) (Store, error) {
 	if err := c.Ping(context.Background()).Err(); err != nil {
 		return nil, err
 	}
-	return &redisStore{c: c, signer: cfg.checkpointSigner}, nil
+	return &redisStore{c: c, signer: cfg.checkpointSigner, requireCheckpoint: cfg.requireCheckpoint}, nil
 }
 
 // ClaimIntent uses SET ... NX as the atomic at-most-once gate: the first caller
@@ -146,7 +150,7 @@ func (s *redisStore) VerifyAudit(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	return VerifyAgainstCheckpoint(es, cp, found, s.signer != nil)
+	return VerifyAgainstCheckpoint(es, cp, found, s.signer != nil || s.requireCheckpoint)
 }
 
 // loadCheckpoint reads the persisted signed checkpoint (found==false when none

@@ -11,7 +11,8 @@ type StoreOption func(*storeConfig)
 
 // storeConfig collects construction-time options shared across backends.
 type storeConfig struct {
-	checkpointSigner CheckpointSigner
+	checkpointSigner  CheckpointSigner
+	requireCheckpoint bool
 }
 
 // WithCheckpointSigner attaches a signer so the store maintains a signed audit
@@ -22,6 +23,18 @@ type storeConfig struct {
 // doesn't opt in.
 func WithCheckpointSigner(s CheckpointSigner) StoreOption {
 	return func(c *storeConfig) { c.checkpointSigner = s }
+}
+
+// WithRequireCheckpoint opens a store in verify-only enforcing mode: VerifyAudit
+// treats a missing checkpoint over a non-empty chain as tampering, EVEN without a
+// signer attached. This is the auditor's seam — `sloppy audit` can hold only the
+// public key (or no key at all) yet still detect a stripped checkpoint, because
+// VerifyAgainstCheckpoint verifies the persisted checkpoint using its own
+// cp.PubKey/cp.Sig and never needs the private Sign() path. Without this, a
+// no-signer reopen falls back to the legacy chain-only guarantee and reads a
+// checkpoint-strip as "verified".
+func WithRequireCheckpoint(require bool) StoreOption {
+	return func(c *storeConfig) { c.requireCheckpoint = require }
 }
 
 func applyStoreOptions(opts []StoreOption) storeConfig {
