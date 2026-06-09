@@ -1,15 +1,17 @@
 #!/bin/sh
 # Fast local quality gate. Defense-in-depth: the full gate (golangci-lint, -race,
-# govulncheck) runs in `make ci` and in GitHub Actions; this keeps commits honest.
+# govulncheck, actionlint) runs in `make ci` and in GitHub Actions; this keeps commits honest.
 set -e
 
-echo "pre-commit: gofmt"
-unformatted=$(gofmt -l .)
-if [ -n "$unformatted" ]; then
-	echo "✗ unformatted files (run: make fmt):"
-	echo "$unformatted"
+echo "pre-commit: format check (go/yaml/shell)"
+d=$(go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 fmt --diff)
+if [ -n "$d" ]; then
+	echo "✗ Go not gofumpt/gci-clean (run: make fmt):"
+	echo "$d"
 	exit 1
 fi
+go run github.com/google/yamlfmt/cmd/yamlfmt@v0.21.0 -lint .
+go run mvdan.cc/sh/v3/cmd/shfmt@v3.13.1 -ln posix -i 0 -s -d .githooks/
 
 echo "pre-commit: go vet"
 go vet ./...
