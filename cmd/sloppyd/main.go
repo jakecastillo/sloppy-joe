@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -26,7 +27,7 @@ import (
 )
 
 // buildEngine wires the loop from on-disk config. Returns a cleanup closer.
-func buildEngine(rulesPath, dbPath, pricebookPath, keyPath, storeKind, redisAddr string, failClosed bool, out io.Writer) (*engine.Engine, *ledger.CostLedger, *metrics.Registry, func(), error) {
+func buildEngine(rulesPath, dbPath, pricebookPath, keyPath, storeKind, redisAddr string, failClosed bool, out io.Writer, logger *slog.Logger) (*engine.Engine, *ledger.CostLedger, *metrics.Registry, func(), error) {
 	rs, err := config.LoadRules(rulesPath)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -68,12 +69,12 @@ func buildEngine(rulesPath, dbPath, pricebookPath, keyPath, storeKind, redisAddr
 	if failClosed {
 		fm = engine.FailClosed
 	}
-	e := engine.New(rec, reg, st, signer, engine.WithLedger(l), engine.WithMetrics(m), engine.WithFailMode(fm))
+	e := engine.New(rec, reg, st, signer, engine.WithLedger(l), engine.WithMetrics(m), engine.WithFailMode(fm), engine.WithLogger(logger))
 	return e, l, m, func() { st.Close() }, nil
 }
 
 // serve runs the ingest HTTP server + the TTL-revert ticker until ctx is cancelled.
-func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.CostLedger, m *metrics.Registry, authz *ee.Authorizer, revertEvery time.Duration, out io.Writer) error {
+func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.CostLedger, m *metrics.Registry, authz *ee.Authorizer, revertEvery time.Duration, logger *slog.Logger) error {
 	h := ingest.NewServer(e, l).SetMetrics(m).Handler()
 	if authz != nil {
 		h = authz.Middleware(h)
@@ -90,7 +91,7 @@ func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.Cos
 			case <-ticker.C:
 				now := time.Now().UTC()
 				if n, err := e.ProcessDueReverts(ctx, now); err == nil && n > 0 {
-					fmt.Fprintf(out, "reverted %d expired intent(s)\n", n)
+					logger.Info("reverted expired intents", "count", n)
 				}
 				_ = e.PruneUsage(ctx, now.Add(-48*time.Hour))
 			}
@@ -104,7 +105,7 @@ func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.Cos
 		_ = srv.Shutdown(shctx)
 	}()
 
-	fmt.Fprintf(out, "🥪 sloppyd listening on %s\n", ln.Addr())
+	logger.Info("sloppyd listening", "addr", ln.Addr().String())
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -121,15 +122,22 @@ func main() {
 	authOn := flag.Bool("auth", false, "require API-key RBAC on the HTTP API (keys via SLOPPY_API_KEYS)")
 	store := flag.String("store", "sqlite", "state backend: sqlite|redis")
 	redisAddr := flag.String("redis-addr", "", "redis address host:port (when --store=redis)")
+	logFormat := flag.String("log-format", "text", "log format: text|json")
 	revertEvery := flag.Duration("revert-interval", 30*time.Second, "TTL revert scan interval")
 	flag.Parse()
+
+	var lh slog.Handler = slog.NewTextHandler(os.Stdout, nil)
+	if *logFormat == "json" {
+		lh = slog.NewJSONHandler(os.Stdout, nil)
+	}
+	logger := slog.New(lh)
 
 	var authz *ee.Authorizer
 	if *authOn {
 		authz = ee.LoadFromEnv()
 	}
 
-	e, l, m, cleanup, err := buildEngine(*rulesPath, *dbPath, *pricebookPath, *keyPath, *store, *redisAddr, *failClosed, os.Stdout)
+	e, l, m, cleanup, err := buildEngine(*rulesPath, *dbPath, *pricebookPath, *keyPath, *store, *redisAddr, *failClosed, os.Stdout, logger)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -143,7 +151,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := serve(ctx, ln, e, l, m, authz, *revertEvery, os.Stdout); err != nil {
+	if err := serve(ctx, ln, e, l, m, authz, *revertEvery, logger); err != nil {
 		fmt.Fprintln(os.Stderr, "serve:", err)
 		os.Exit(1)
 	}

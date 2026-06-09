@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -60,6 +61,7 @@ type Engine struct {
 	failMode  FailMode
 	met       *metrics.Registry
 	immediate bool
+	log       *slog.Logger
 
 	mu      sync.Mutex
 	pending map[string]time.Time // ruleSHA|correlationKey -> first-seen, for `for:` gating
@@ -84,12 +86,22 @@ func WithMetrics(m *metrics.Registry) Option { return func(e *Engine) { e.met = 
 // Used for one-shot CLI injection; the daemon evaluates `for:` across the live stream.
 func WithImmediate() Option { return func(e *Engine) { e.immediate = true } }
 
+// WithLogger attaches a structured logger for decision/error events (default: discard).
+func WithLogger(l *slog.Logger) Option {
+	return func(e *Engine) {
+		if l != nil {
+			e.log = l
+		}
+	}
+}
+
 // New builds an engine. Extra behaviour is opt-in via Options (back-compatible).
 func New(rec *rules.Reconciler, reg *actuator.Registry, store state.Store, signer intent.Signer, opts ...Option) *Engine {
 	e := &Engine{
 		rec: rec, reg: reg, store: store, signer: signer,
 		now:      func() time.Time { return time.Now().UTC() },
 		failMode: FailOpen,
+		log:      slog.New(slog.DiscardHandler),
 		pending:  map[string]time.Time{},
 	}
 	for _, o := range opts {
@@ -152,6 +164,7 @@ func (e *Engine) throttled(ctx context.Context, r rules.Rule, now time.Time) boo
 	if used >= count {
 		_, _ = e.store.AppendAudit(ctx, "intent.throttled", fmt.Sprintf("rule=%s budget=%s used=%d", r.SHA, r.With.IntentBudget, used))
 		e.met.Inc("intents_throttled")
+		e.log.Warn("rule throttled", "rule", r.SHA, "budget", r.With.IntentBudget)
 		return true
 	}
 	_ = e.store.RecordAction(ctx, r.SHA, now)
@@ -179,6 +192,7 @@ func (e *Engine) rollbackOnClear(ctx context.Context, r rules.Rule, corr string)
 	}
 	_ = e.store.ClearOutstanding(ctx, key)
 	e.met.Inc("intents_rolled_back")
+	e.log.Info("rule rolled back on clear", "rule", r.SHA, "corr", corr, "count", len(outs))
 }
 
 func (e *Engine) forWindowSatisfied(ruleSHA, corr string, dur time.Duration, now time.Time) bool {
@@ -228,6 +242,7 @@ func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now
 	if err != nil {
 		_, _ = e.store.AppendAudit(ctx, "intent.failed", fmt.Sprintf("%s err=%v", auditDetail(in), err))
 		e.met.Inc("intents_failed")
+		e.log.Warn("intent failed", "intent", in.ID, "kind", string(in.Kind), "target", in.Target, "err", err)
 		return Result{Intent: in, Outcome: OutFailed, Err: err.Error()}
 	}
 	rcpt.Signature = e.signer.Sign([]byte(rcpt.IntentID + string(rcpt.Outcome) + rcpt.Actuator))
@@ -251,6 +266,7 @@ func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now
 		}
 	}
 	e.met.Inc("intents_applied")
+	e.log.Info("intent applied", "intent", in.ID, "kind", string(in.Kind), "target", in.Target, "rule", in.RuleSHA)
 	return Result{Intent: in, Outcome: OutApplied, Receipt: rcpt}
 }
 
@@ -279,6 +295,7 @@ func (e *Engine) ProcessDueReverts(ctx context.Context, now time.Time) (int, err
 		}
 		_, _ = e.store.AppendAudit(ctx, "intent.reverted", fmt.Sprintf("%s target=%s", pr.Kind, pr.Target))
 		e.met.Inc("intents_reverted")
+		e.log.Info("intent reverted", "intent", pr.IntentID, "kind", pr.Kind, "target", pr.Target)
 		n++
 	}
 	return n, nil
