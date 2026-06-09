@@ -64,6 +64,34 @@ func storeContract(t *testing.T, s Store) {
 		t.Fatalf("reverted entry should be gone, got %d", len(d))
 	}
 
+	// Rule-action budget accounting.
+	if err := s.RecordAction("ruleA", base); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordAction("ruleA", base.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.CountActions("ruleA", base); n != 2 {
+		t.Fatalf("want 2 actions since base, got %d", n)
+	}
+	if n, _ := s.CountActions("ruleA", base.Add(time.Hour)); n != 0 {
+		t.Fatalf("want 0 actions in the future, got %d", n)
+	}
+
+	// On-clear outstanding tracking.
+	if err := s.RecordOutstanding("ruleA|acme", PendingRevert{IntentID: "o1", Kind: "route_override", Target: "m", ArgsJSON: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if outs, _ := s.Outstanding("ruleA|acme"); len(outs) != 1 || outs[0].IntentID != "o1" {
+		t.Fatalf("outstanding: %+v", outs)
+	}
+	if err := s.ClearOutstanding("ruleA|acme"); err != nil {
+		t.Fatal(err)
+	}
+	if outs, _ := s.Outstanding("ruleA|acme"); len(outs) != 0 {
+		t.Fatalf("cleared outstanding should be empty: %+v", outs)
+	}
+
 	// Concurrency: parallel appends must keep the tamper-evident chain intact.
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {

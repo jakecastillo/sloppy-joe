@@ -29,6 +29,11 @@ func (errStore) VerifyAudit() bool                                   { return fa
 func (errStore) ScheduleRevert(state.PendingRevert) error            { return errBoom }
 func (errStore) DueReverts(time.Time) ([]state.PendingRevert, error) { return nil, errBoom }
 func (errStore) MarkReverted(string) error                           { return errBoom }
+func (errStore) RecordAction(string, time.Time) error                { return errBoom }
+func (errStore) CountActions(string, time.Time) (int, error)         { return 0, errBoom }
+func (errStore) RecordOutstanding(string, state.PendingRevert) error { return errBoom }
+func (errStore) Outstanding(string) ([]state.PendingRevert, error)   { return nil, errBoom }
+func (errStore) ClearOutstanding(string) error                       { return errBoom }
 func (errStore) Close() error                                        { return nil }
 
 func engineWithStore(st state.Store, opts ...Option) (*Engine, *actuator.Fake) {

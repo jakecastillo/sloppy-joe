@@ -29,6 +29,16 @@ type Store interface {
 	DueReverts(now time.Time) ([]PendingRevert, error)
 	// MarkReverted removes a pending revert once reverted.
 	MarkReverted(intentID string) error
+	// RecordAction records that a rule fired (for intent_budget accounting).
+	RecordAction(ruleSHA string, at time.Time) error
+	// CountActions counts a rule's firings at/after `since`.
+	CountActions(ruleSHA string, since time.Time) (int, error)
+	// RecordOutstanding tracks an applied, on-clear-reversible intent under key (ruleSHA|corr).
+	RecordOutstanding(key string, r PendingRevert) error
+	// Outstanding returns the on-clear intents tracked under key.
+	Outstanding(key string) ([]PendingRevert, error)
+	// ClearOutstanding removes all on-clear intents under key.
+	ClearOutstanding(key string) error
 	// Close releases the backend.
 	Close() error
 }
