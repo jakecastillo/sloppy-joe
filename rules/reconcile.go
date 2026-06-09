@@ -123,7 +123,7 @@ func actionToIntent(a Action, r Rule, sig core.Signal) core.RemediationIntent {
 			ttl = d
 		}
 	}
-	id := core.DeterministicID(string(a.Kind), target, r.SHA, sig.CorrelationKey)
+	id := core.DeterministicID(a.Kind, target, r.SHA, sig.CorrelationKey)
 	return core.RemediationIntent{
 		ID:      id,
 		Kind:    core.ActionKind(a.Kind),
