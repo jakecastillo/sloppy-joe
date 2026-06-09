@@ -134,13 +134,18 @@ go build -o bin/sloppyd ./cmd/sloppyd
 ./bin/sloppy inject --now --rules examples/rules --db /tmp/sloppy.db examples/signals/cost-spike.json
 ./bin/sloppy audit tail --db /tmp/sloppy.db
 
+# verify every applied intent's ed25519 signature against the persisted public key
+# (sloppy.key.pub). Exits non-zero if any signature fails — a CI-gateable check.
+./bin/sloppy audit --verify-sigs --db /tmp/sloppy.db --key sloppy.key
+
 # or run the daemon and POST signals / usage over HTTP
 ./bin/sloppyd --rules examples/rules --db /tmp/sloppy.db &
 curl -XPOST localhost:8723/v1/signals -d @examples/signals/cost-spike.json
 curl localhost:8723/status
 ```
 
-**Commands:** `sloppy inject` · `sloppy rules validate` · `sloppy test --replay` · `sloppy audit tail` · `sloppy doctor` · `sloppyd` (daemon).
+**Commands:** `sloppy inject` · `sloppy rules validate` · `sloppy test --replay` · `sloppy audit tail` · `sloppy audit --verify-sigs` · `sloppy doctor` · `sloppyd` (daemon).
+- **Verifiable signatures:** intents are ed25519-signed; the applied-audit entry persists the signed canonical bytes + full signature. `sloppy audit --verify-sigs` recomputes each intent's canonical bytes and verifies the signature against the persisted public key (`sloppy.key.pub`), exiting non-zero on any failure. The private key (`sloppy.key`, mode `0600`) is required to forge a verifiable intent; a holder of only the public key can verify authenticity and detect tampering but cannot sign. See [`SECURITY.md`](SECURITY.md) for the threat model.
 - **State backend:** `sloppyd --store sqlite` (default) or `--store redis --redis-addr host:6379`.
 - **Auth:** `sloppyd --auth` with `SLOPPY_API_KEYS="key1=ingest:write,status:read"`.
 - **Gateway:** to wire a real LiteLLM admin API, set `SLOPPY_LITELLM_URL` and `SLOPPY_TOKEN_LITELLM`.

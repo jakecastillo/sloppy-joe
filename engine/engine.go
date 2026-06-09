@@ -294,13 +294,14 @@ func (e *Engine) applyIntent(ctx context.Context, in core.RemediationIntent, now
 		e.log.Warn("intent failed", "intent", in.ID, "kind", string(in.Kind), "target", in.Target, "err", err)
 		return Result{Intent: in, Outcome: OutFailed, Err: err.Error()}
 	}
-	rcpt.Signature = e.signer.Sign([]byte(rcpt.IntentID + string(rcpt.Outcome) + rcpt.Actuator))
 	if err := e.store.MarkIntentApplied(ctx, in.ID); err != nil {
 		// A lost idempotency record silently breaks at-most-once — surface it.
 		e.met.Inc("state_write_failed")
 		_, _ = e.store.AppendAudit(ctx, "intent.mark_failed", auditDetail(in)+fmt.Sprintf(" err=%v", err))
 	}
-	if _, err := e.store.AppendAudit(ctx, "intent.applied", auditDetail(in)+" sig="+short(in.Signature)); err != nil {
+	// Persist the FULL signature + signed canonical bytes so the signature is
+	// independently verifiable later via `sloppy audit --verify-sigs`.
+	if _, err := e.store.AppendAudit(ctx, "intent.applied", intent.AppliedAuditDetail(in)); err != nil {
 		e.met.Inc("audit_write_failed")
 	}
 	if in.TTL > 0 {
@@ -357,11 +358,4 @@ func (e *Engine) PruneUsage(ctx context.Context, before time.Time) error {
 
 func auditDetail(i core.RemediationIntent) string {
 	return fmt.Sprintf("%s target=%s rule=%s", i.Kind, i.Target, i.RuleSHA)
-}
-
-func short(s string) string {
-	if len(s) > 12 {
-		return s[:12]
-	}
-	return s
 }

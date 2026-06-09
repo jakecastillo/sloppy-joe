@@ -77,6 +77,41 @@ func TestEngineClosesLoopSignsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+// The applied-audit entry must persist the FULL signature plus the signed
+// canonical bytes, so a verifier holding only the public key can confirm the
+// intent was authentically signed — and detect any later edit to a field.
+func TestAppliedAuditPersistsVerifiableSignature(t *testing.T) {
+	e, _, st, signer := build(t, rule)
+	defer st.Close()
+	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	if _, err := e.Handle(context.Background(), sig); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	entries, err := st.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	pub := signer.PublicKey()
+	verified := 0
+	for _, en := range entries {
+		if en.Kind != "intent.applied" {
+			continue
+		}
+		ok, found := intent.VerifyAuditDetail(pub, en.Detail)
+		if !found {
+			t.Fatalf("intent.applied entry carries no verifiable signature: %q", en.Detail)
+		}
+		if !ok {
+			t.Fatalf("persisted signature failed to verify: %q", en.Detail)
+		}
+		verified++
+	}
+	if verified != 1 {
+		t.Fatalf("expected exactly 1 verifiable applied entry, got %d", verified)
+	}
+}
+
 func TestEngineDryRunDoesNotActuate(t *testing.T) {
 	e, f, st, _ := build(t, `
 on: cost.budget_burn

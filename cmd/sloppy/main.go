@@ -60,13 +60,14 @@ func cmdInject(args []string, out io.Writer) int {
 	rulesPath := fs.String("rules", "rules", "rules dir or file")
 	dbPath := fs.String("db", "sloppy.db", "sqlite db path")
 	cfgPath := fs.String("config", "sloppy.yaml", "path to sloppy.yaml (platform wiring)")
+	keyPath := fs.String("key", "sloppy.key", "ed25519 signing key file (created if absent; exports <key>.pub)")
 	now := fs.Bool("now", false, "fire matching rules immediately, bypassing for: windows (one-shot)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fmt.Fprintln(out, "usage: sloppy inject [--rules dir] [--db path] <signal.json>")
+		fmt.Fprintln(out, "usage: sloppy inject [--rules dir] [--db path] [--key file] <signal.json>")
 		return 2
 	}
 	sig, err := config.LoadSignal(rest[0])
@@ -90,7 +91,9 @@ func cmdInject(args []string, out io.Writer) int {
 		return 1
 	}
 	defer st.Close()
-	signer, err := intent.NewEd25519Signer()
+	// Persist the signing key (and export its public key) so the signatures this
+	// writes to the audit chain are later verifiable via `audit --verify-sigs`.
+	signer, err := intent.LoadOrCreateSigner(*keyPath)
 	if err != nil {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
@@ -123,6 +126,9 @@ func cmdAudit(args []string, out io.Writer) int {
 	fs := flag.NewFlagSet("audit", flag.ContinueOnError)
 	fs.SetOutput(out)
 	dbPath := fs.String("db", "sloppy.db", "sqlite db path")
+	keyPath := fs.String("key", "sloppy.key", "signing key whose <key>.pub verifies signatures (--verify-sigs)")
+	pubPath := fs.String("pubkey", "", "explicit public key file (defaults to <key>.pub)")
+	verifySigs := fs.Bool("verify-sigs", false, "verify each persisted intent signature against the public key")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -145,6 +151,42 @@ func cmdAudit(args []string, out io.Writer) int {
 		status = "TAMPERED ✗"
 	}
 	fmt.Fprintf(out, "chain: %s (%d entries)\n", status, len(entries))
+	if *verifySigs {
+		return verifyAuditSigs(out, entries, *keyPath, *pubPath)
+	}
+	return 0
+}
+
+// verifyAuditSigs loads the persisted public key and verifies every signed audit
+// entry's signature against the recomputed canonical bytes. It reports
+// verified/failed counts and returns a non-zero exit code if any signature fails
+// to verify (or the chain has tampered hashes), so it can gate CI.
+func verifyAuditSigs(out io.Writer, entries []state.AuditEntry, keyPath, pubPath string) int {
+	if pubPath == "" {
+		pubPath = intent.PublicKeyPath(keyPath)
+	}
+	pub, err := intent.LoadVerifierKey(pubPath)
+	if err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	verified, failed := 0, 0
+	for _, e := range entries {
+		ok, found := intent.VerifyAuditDetail(pub, e.Detail)
+		if !found {
+			continue // not a signed entry (e.g. intent.reverted) — nothing to check
+		}
+		if ok {
+			verified++
+			continue
+		}
+		failed++
+		fmt.Fprintf(out, "✗ seq %d (%s): signature verification FAILED\n", e.Seq, e.Kind)
+	}
+	fmt.Fprintf(out, "signatures: %d verified, failed=%d\n", verified, failed)
+	if failed > 0 {
+		return 1
+	}
 	return 0
 }
 

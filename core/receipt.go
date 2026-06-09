@@ -19,5 +19,4 @@ type Receipt struct {
 	Before    any       `json:"before,omitempty"`
 	After     any       `json:"after,omitempty"`
 	Outcome   Outcome   `json:"outcome"`
-	Signature string    `json:"signature,omitempty"`
 }
