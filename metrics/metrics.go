@@ -10,6 +10,11 @@ type Registry struct {
 	m  map[string]int64
 }
 
+// emptySnapshot is a shared, never-mutated empty map returned by Snapshot when
+// the registry holds no counters, so the routinely-polled /status endpoint does
+// not churn a fresh allocation per call. Callers only read from snapshots.
+var emptySnapshot = map[string]int64{}
+
 // New creates an empty registry.
 func New() *Registry { return &Registry{m: map[string]int64{}} }
 
@@ -29,10 +34,27 @@ func (r *Registry) Add(name string, n int64) {
 	r.mu.Unlock()
 }
 
-// Snapshot returns a copy of all counters.
+// Get returns the value of a single counter (0 if absent) with a single mutex
+// read and no map allocation. It matches Snapshot()[name] without copying the
+// whole registry, for the common single-key read on the polled /status path.
+func (r *Registry) Get(name string) int64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.m[name]
+}
+
+// Snapshot returns a copy of all counters. When the registry is empty it
+// returns a shared empty map without allocating; otherwise callers get an
+// independent copy.
 func (r *Registry) Snapshot() map[string]int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(r.m) == 0 {
+		return emptySnapshot
+	}
 	out := make(map[string]int64, len(r.m))
 	for k, v := range r.m {
 		out[k] = v
