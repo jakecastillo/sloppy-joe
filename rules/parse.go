@@ -3,6 +3,7 @@ package rules
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -24,10 +25,10 @@ func ParseRules(b []byte) ([]Rule, error) {
 		return nil, fmt.Errorf("rules: yaml: %w", err)
 	}
 	if raw.On == "" {
-		return nil, fmt.Errorf("rules: missing `on:`")
+		return nil, errors.New("rules: missing `on:`")
 	}
 	if raw.When == "" {
-		return nil, fmt.Errorf("rules: missing `when:`")
+		return nil, errors.New("rules: missing `when:`")
 	}
 	var dur time.Duration
 	if raw.For != "" {
@@ -44,7 +45,7 @@ func ParseRules(b []byte) ([]Rule, error) {
 		}
 	}
 	if len(actions) == 0 {
-		return nil, fmt.Errorf("rules: `then:` must list at least one action")
+		return nil, errors.New("rules: `then:` must list at least one action")
 	}
 	sum := sha256.Sum256(b)
 	return []Rule{{

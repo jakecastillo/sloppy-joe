@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,7 +24,7 @@ func OpenStore(kind, sqlitePath, redisAddr string, opts ...state.StoreOption) (s
 		return state.OpenSQLite(sqlitePath, opts...)
 	case "redis":
 		if redisAddr == "" {
-			return nil, fmt.Errorf("config: redis store requires a redis address")
+			return nil, errors.New("config: redis store requires a redis address")
 		}
 		return state.OpenRedis(redisAddr, opts...)
 	default:
