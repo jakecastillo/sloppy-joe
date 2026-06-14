@@ -22,6 +22,9 @@ func (r *Registry) Add(name string, n int64) {
 		return
 	}
 	r.mu.Lock()
+	if r.m == nil {
+		r.m = map[string]int64{}
+	}
 	r.m[name] += n
 	r.mu.Unlock()
 }
