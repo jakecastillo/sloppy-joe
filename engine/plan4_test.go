@@ -29,6 +29,7 @@ func (errStore) VerifyAudit(context.Context) bool                  { return fals
 func (errStore) ScheduleRevert(context.Context, state.PendingRevert) error {
 	return errBoom
 }
+
 func (errStore) DueReverts(context.Context, time.Time) ([]state.PendingRevert, error) {
 	return nil, errBoom
 }
@@ -37,9 +38,11 @@ func (errStore) RecordAction(context.Context, string, time.Time) error { return 
 func (errStore) CountActions(context.Context, string, time.Time) (int, error) {
 	return 0, errBoom
 }
+
 func (errStore) RecordOutstanding(context.Context, string, state.PendingRevert) error {
 	return errBoom
 }
+
 func (errStore) Outstanding(context.Context, string) ([]state.PendingRevert, error) {
 	return nil, errBoom
 }
@@ -62,8 +65,10 @@ func engineWithStore(st state.Store, opts ...Option) (*Engine, *actuator.Fake) {
 }
 
 func burnSignal() core.Signal {
-	return core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	return core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 }
 
 func TestFailOpenAppliesDespiteStoreError(t *testing.T) {

@@ -29,8 +29,10 @@ func countApplied(rs []Result) int {
 func TestEngineClosesLoopSignsAndIsIdempotent(t *testing.T) {
 	e, f, st, signer := mustEngine(t, rule)
 	defer st.Close()
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 
 	res, err := e.Handle(context.Background(), sig)
 	if err != nil || countApplied(res) != 1 {
@@ -59,8 +61,10 @@ func TestEngineClosesLoopSignsAndIsIdempotent(t *testing.T) {
 func TestAppliedAuditPersistsVerifiableSignature(t *testing.T) {
 	e, _, st, signer := mustEngine(t, rule)
 	defer st.Close()
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 	if _, err := e.Handle(context.Background(), sig); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
@@ -96,8 +100,10 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 with: { dry_run: true }
 `)
 	defer st.Close()
-	res, _ := e.Handle(context.Background(), core.Signal{Type: "cost.budget_burn",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}})
+	res, _ := e.Handle(context.Background(), core.Signal{
+		Type:    "cost.budget_burn",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	})
 	if f.Applied != 0 {
 		t.Fatalf("dry_run must not actuate, fired %d", f.Applied)
 	}

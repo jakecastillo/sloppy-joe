@@ -22,8 +22,10 @@ func TestGitHubOpenIssue(t *testing.T) {
 	}))
 	defer srv.Close()
 	a := NewGitHub(srv.URL, func() (string, error) { return "gh-tok", nil })
-	i := core.RemediationIntent{ID: "int-2", Kind: core.ActionOpenIssue, RuleSHA: "sha9",
-		Target: "gpt-4o", Args: map[string]any{"repo": "acme/ops"}}
+	i := core.RemediationIntent{
+		ID: "int-2", Kind: core.ActionOpenIssue, RuleSHA: "sha9",
+		Target: "gpt-4o", Args: map[string]any{"repo": "acme/ops"},
+	}
 	r, err := a.Apply(context.Background(), i)
 	if err != nil || r.Outcome != core.OutcomeApplied {
 		t.Fatalf("apply: %+v err=%v", r, err)

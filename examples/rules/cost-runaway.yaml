@@ -3,6 +3,6 @@
 on: cost.budget_burn
 when: signal.data.spend_1h_usd > 50.0
 then:
-  - throttle_tenant: { ttl: 30m }
+  - throttle_tenant: {ttl: 30m}
 with:
   rollback: on_clear

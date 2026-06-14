@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
+
 	"github.com/sloppyjoe/sloppy/actuator"
 	"github.com/sloppyjoe/sloppy/core"
 	"github.com/sloppyjoe/sloppy/intent"
@@ -22,10 +23,12 @@ type atomicFake struct{ applied int64 }
 func (f *atomicFake) Capabilities() []core.ActionKind {
 	return []core.ActionKind{core.ActionRouteOverride, core.ActionOpenIssue, core.ActionPage, core.ActionThrottleTenant, core.ActionDisableDeployment}
 }
+
 func (f *atomicFake) Apply(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	atomic.AddInt64(&f.applied, 1)
 	return core.Receipt{IntentID: i.ID, Actuator: "atomic-fake", Outcome: core.OutcomeApplied}, nil
 }
+
 func (f *atomicFake) Revert(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	return core.Receipt{IntentID: i.ID, Actuator: "atomic-fake", Outcome: core.OutcomeReverted}, nil
 }

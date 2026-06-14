@@ -2,6 +2,6 @@
 on: latency.regression
 when: signal.data.p95_latency_ms > 2000
 then:
-  - page: { slack: "#oncall" }
-  - open_issue: { repo: acme/ops }
-with: { dry_run: false }
+  - page: {slack: "#oncall"}
+  - open_issue: {repo: acme/ops}
+with: {dry_run: false}

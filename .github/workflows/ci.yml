@@ -22,15 +22,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: gofmt
-        run: |
-          out=$(gofmt -l .)
-          if [ -n "$out" ]; then echo "::error::unformatted files:"; echo "$out"; exit 1; fi
       - name: go vet
         run: go vet ./...
+      - name: format check (yaml + shell)
+        run: |
+          go run github.com/google/yamlfmt/cmd/yamlfmt@v0.21.0 -lint .
+          go run mvdan.cc/sh/v3/cmd/shfmt@v3.13.1 -ln posix -i 0 -s -d .githooks/
       # Pinned version (no @latest drift); v2 config in .golangci.yml.
-      - name: golangci-lint
+      # `run` also enforces the gofumpt+gci formatters (fails on unformatted Go).
+      - name: golangci-lint (lint + gofumpt/gci format gate)
         run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color -shellcheck= -pyflakes=
 
   test:
     runs-on: ubuntu-latest

@@ -40,6 +40,7 @@ func (o *onlyNotify) Apply(_ context.Context, i core.RemediationIntent) (core.Re
 	o.lastArgs = i.Args
 	return core.Receipt{IntentID: i.ID, Actuator: "notify", Outcome: core.OutcomeApplied}, nil
 }
+
 func (o *onlyNotify) Revert(_ context.Context, i core.RemediationIntent) (core.Receipt, error) {
 	o.reverted++
 	return core.Receipt{IntentID: i.ID, Actuator: "notify", Outcome: core.OutcomeReverted}, nil

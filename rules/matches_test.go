@@ -9,8 +9,10 @@ import (
 func TestEvaluateMatchesCarriesRule(t *testing.T) {
 	rs, _ := ParseRules([]byte(sampleRule))
 	rec, _ := NewReconciler(rs)
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Tenant: "acme", Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Tenant: "acme", Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 	ms := rec.EvaluateMatches(sig, nil)
 	if len(ms) != 1 {
 		t.Fatalf("want 1 match, got %d", len(ms))

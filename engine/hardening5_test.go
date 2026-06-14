@@ -170,8 +170,10 @@ func TestStateUnavailableFailClosedInconclusive(t *testing.T) {
 	e, f, inner := stateRuleEngine(t, m, FailClosed)
 	defer inner.Close()
 
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Tenant: "acme", Alias: "gpt-4o"}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Tenant: "acme", Alias: "gpt-4o"},
+	}
 	res, _ := e.Handle(context.Background(), sig)
 
 	if m.Snapshot()["state_unavailable"] != 1 {
@@ -195,8 +197,10 @@ func TestStateUnavailableFailOpenSurfacedNotInconclusive(t *testing.T) {
 	e, _, inner := stateRuleEngine(t, m, FailOpen)
 	defer inner.Close()
 
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Tenant: "acme", Alias: "gpt-4o"}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Tenant: "acme", Alias: "gpt-4o"},
+	}
 	res, _ := e.Handle(context.Background(), sig)
 
 	if m.Snapshot()["state_unavailable"] != 1 {

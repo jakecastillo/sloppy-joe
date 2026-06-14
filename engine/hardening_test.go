@@ -20,8 +20,10 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]
 `
 
 func burnSig() core.Signal {
-	return core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	return core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 }
 
 func auditHas(t *testing.T, st state.Store, kind string) bool {

@@ -1,0 +1,10 @@
+formatter:
+  type: basic
+  indent: 2
+  retain_line_breaks: true
+  include_document_start: false
+  line_ending: lf
+  trim_trailing_whitespace: true
+  eof_newline: true
+  pad_line_comments: 2
+  max_line_length: 0

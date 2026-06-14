@@ -28,8 +28,10 @@ func TestStructuredLoggingOnApply(t *testing.T) {
 	e := New(rec, reg, st, signer, WithLogger(logger),
 		WithClock(func() time.Time { return time.Unix(1749340800, 0).UTC() }))
 
-	sig := core.Signal{Type: "cost.budget_burn", CorrelationKey: "acme:cost",
-		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0}}
+	sig := core.Signal{
+		Type: "cost.budget_burn", CorrelationKey: "acme:cost",
+		Subject: core.Subject{Alias: "gpt-4o"}, Data: map[string]any{"spend_1h_usd": 9.0},
+	}
 	if _, err := e.Handle(context.Background(), sig); err != nil {
 		t.Fatal(err)
 	}
