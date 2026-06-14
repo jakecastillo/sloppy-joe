@@ -1,6 +1,6 @@
 # Sloppy Joe — Autonomous Multi-Agent Delivery Pipeline (Design)
 
-> **Status:** design, awaiting approval. Written 2026-06-14.
+> **Status:** approved 2026-06-14 (decisions in §11). Written 2026-06-14.
 > A self-running PM/BA → research → refine → implement → review → merge pipeline that
 > turns the three standing themes and the existing backlog into governed, audited,
 > CI-gated changes on `main` **with no human in today's loop** — built on the existing
@@ -232,21 +232,36 @@ Inside the `merge-slot` (acquire → … → release):
 These make "unattended" safe. The infra ones ship/verify **under supervision in run one**,
 before promotion to cron.
 
-### 7.1 Branch protection on `main` (precondition)  ⚠ outward-facing
+### 7.1 Branch protection on `main` — **DEFERRED** (user decision, 2026-06-14)
 
-**[reality check]** `main` is unprotected (verified `404`). Before any unattended push,
-install a ruleset on `main`: **require the status checks** in §6.1, **disallow direct
-pushes**, require linear history. *Review is enforced by our gate (§6.3), not GitHub* — a
-required-review rule can't be satisfied (the bot is the PR author and there's no second
-human/App reviewer), so we require checks + no-direct-push and let the orchestration enforce
-review. Admin (the user) may bypass. **This changes the user's own workflow** (they'd push
-via PR or admin-bypass) → flagged for explicit approval at the review gate (§11).
+**[reality check]** `main` is unprotected (verified `404`). The user **chose not to enable
+branch protection today**, to preserve the existing workflow where their *other* concurrent
+agents direct-push to `main` (one did exactly that during this design pass). Consequence: the
+merge gate is **enforced by the orchestration only**, not by GitHub — honor-system at the
+server. Because of that, these **compensating controls are mandatory** (not optional) for
+every unattended run:
+
+1. **Implementers never touch `main`.** An implementer may only push its own PR branch
+   (`git push origin HEAD:refs/heads/<bead-branch>`). No role except the serialized **Merge**
+   stage may write `main`, and it does so only via `gh pr merge` after §6.2 + §6.3 + §6.4.
+2. **The deterministic path-guard (§6.2) is now the primary defense** — it runs before any
+   merge and hard-defers any forbidden-surface diff, independent of the LLM reviewer.
+3. **Kill-criteria trip hard (§7.5):** any *attempt* to merge a forbidden-surface diff, or
+   any red result reaching `main`, halts the run and notifies.
+4. **Post-merge re-verification:** after each merge, re-fetch `main` and confirm CI is green
+   on the merge commit; a red merge commit halts the run.
+5. **Residual risk accepted, explicitly:** a buggy/prompt-injected agent *could* still
+   `git push origin main` directly; the controls above shrink but do not eliminate this.
+   **Revisit enabling branch protection at cron-promotion time** (§9) — strongly recommended
+   before the loop runs truly unsupervised on a schedule.
 
 ### 7.2 Commit provenance / identity
 
-Commit under a **single sanctioned git identity** with `-s` (DCO), a `Bead-Id:` trailer for
-provenance, and **never** an AI trailer. Identity choice (user's own vs a dedicated bot
-identity) is an open decision (§11).
+Commit under a **dedicated bot identity** (resolved 2026-06-14; e.g. `Sloppy Joe Bot
+<bot@users.noreply.github.com>`) with `-s` (DCO), a `Bead-Id:` trailer for provenance, and
+**never** an AI co-author / `generated-with` trailer (commit-lint rejects those). The bot
+identity keeps autonomous work from being falsely attributed to a human; CONTRIBUTING should
+note that bot-authored, DCO-signed commits are sanctioned.
 
 ### 7.3 GitHub orchestration token boundary
 
@@ -322,7 +337,8 @@ tracker**, visible, never silently overridden.
 
 **Run one (supervised):**
 
-1. Startup sweep (§7.7) + install safety net (§7.1–7.3) — **infra bead, supervised**.
+1. Startup sweep (§7.7) + install safety net (§7.2–7.6: bot identity, token boundary,
+   `BEADS_DIR`, path-guard tooling, kill-criteria, collision check) — **infra bead, supervised**.
 2. Discover → filtered ready-set (§4.3) + seed epics for the 3 themes.
 3. Research (parallel) → refine a small batch to `stage:ready` (incl. **one bounded breadth
    actuator**, §8.1).
@@ -333,8 +349,10 @@ tracker**, visible, never silently overridden.
 
 - ≥ N beads closed cleanly (PR → CI green → reviewer-approved → merged → pushed);
 - **zero** red pushes to `main`; **zero** forbidden-surface auto-merge attempts;
+- the path-guard (§6.2) observed to defer ≥ 1 forbidden bead, and the gate observed to block
+  any non-green / unreviewed merge;
 - `merge-slot` always released; no orphaned worktrees/claims left;
-- branch protection (§7.1) active and observed to block a direct push.
+- **re-evaluate enabling branch protection (§7.1) before scheduling the unsupervised cron.**
 
 Only then is the same Workflow wired to cron to drain `stage:ready` continuously.
 
@@ -350,19 +368,18 @@ Only then is the same Workflow wired to cron to drain `stage:ready` continuously
 
 ---
 
-## 11. Open decisions to confirm at the spec-review gate
+## 11. Decisions (resolved 2026-06-14)
 
-1. **Branch protection on `main` (§7.1)** — outward-facing; changes the user's own push
-   workflow. Approve enabling it (required checks + no-direct-push, admin bypass)? *Strongly
-   recommended — it's the safety net that makes unattended push safe.*
-2. **Commit identity (§7.2)** — user's own git identity (`Jake Castillo
-   <jakecast@hawaii.edu>`) with `-s`, or a dedicated bot identity? (Both DCO-honest; bot is
-   cleaner provenance.)
-3. **First-run breadth target (§8.1)** — which provider for the first bounded actuator
-   (Portkey / OpenRouter / generic-webhook)? Default: generic-webhook `route_override`
-   (lowest external-API risk).
-4. **First-run size / budget (§7.5)** — default ≈ 5–6 safe beads + 1 breadth actuator + the
-   infra bead; adjust N?
+1. **Branch protection on `main` (§7.1)** — **Skipped today.** Orchestration gate is the sole
+   enforcement; compensating controls in §7.1 are mandatory; revisit before cron promotion.
+2. **Commit identity (§7.2)** — **Dedicated bot identity** with `-s` + `Bead-Id:` trailer, no
+   AI trailer.
+3. **First-run breadth target (§8.1)** — **generic-webhook `route_override`** actuator
+   (lowest external-API risk), default-off behind an `enabled` flag.
+4. **First-run size / budget (§7.5)** — ≈ **5–6 safe beads + 1 breadth actuator + 1 infra
+   bead**; per-run budget + kill-criteria per §7.5.
+5. **Charter / merge gate / cadence / push rights** — per §1 (steward+breadth; CI +
+   adversarial reviewer; prove-once-then-cron; agents may push `origin`).
 
 ---
 
@@ -370,7 +387,8 @@ Only then is the same Workflow wired to cron to drain `stage:ready` continuously
 
 The security-core (§5.1) under autonomy; new `ActionKind`s; opening the Actuator interface to
 *external* drivers (Phase 4, needs signing/SLSA); Postgres/Sigstore/xDS YAGNI parks;
-`sloppy-joe-pir` and `sloppy-joe-6e6` (forbidden-surface) until a supervised day.
+`sloppy-joe-pir` and `sloppy-joe-6e6` (forbidden-surface) until a supervised day;
+**branch protection on `main`** (deferred today by decision — revisit before cron promotion).
 
 ---
 
