@@ -48,14 +48,23 @@ type Server struct {
 	metrics *metrics.Registry  // optional; powers /status
 }
 
-// NewServer builds the ingest server.
-func NewServer(e *engine.Engine, l *ledger.CostLedger) *Server {
-	return &Server{engine: e, ledger: l}
-}
+// Option configures a Server. Mirrors engine.New's functional-options style so
+// optional dependencies are wired the same way across the codebase.
+type Option func(*Server)
 
-// SetMetrics attaches a metrics registry to expose at /status.
-func (s *Server) SetMetrics(m *metrics.Registry) *Server {
-	s.metrics = m
+// WithLedger supplies a cost ledger; nil (the default) disables /v1/usage and
+// /v1/otlp/metrics.
+func WithLedger(l *ledger.CostLedger) Option { return func(s *Server) { s.ledger = l } }
+
+// WithMetrics attaches a metrics registry to expose at /status.
+func WithMetrics(m *metrics.Registry) Option { return func(s *Server) { s.metrics = m } }
+
+// NewServer builds the ingest server. Optional dependencies are opt-in via Options.
+func NewServer(e *engine.Engine, opts ...Option) *Server {
+	s := &Server{engine: e}
+	for _, o := range opts {
+		o(s)
+	}
 	return s
 }
 
