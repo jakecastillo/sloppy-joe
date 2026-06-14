@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +265,73 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not shut down on cancel")
+	}
+}
+
+// When srv.Serve returns a non-ErrServerClosed error, serve() must return AND its
+// background goroutines (ticker + shutdown watcher) must exit on their own — the
+// shutdown goroutine no longer parks forever on a ctx that will never be cancelled.
+// Forcing the error: close the listener before serve() calls srv.Serve, so Serve
+// fails accepting on a closed listener.
+func TestServeErrorNoGoroutineLeak(t *testing.T) {
+	dir := t.TempDir()
+	rulesDir := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rulesDir, "c.yaml"), []byte(`
+on: cost.budget_burn
+when: signal.data.spend_1h_usd > 5.0
+then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	eff := config.Resolve(config.File{
+		Rules:  []string{rulesDir},
+		Store:  config.StoreConfig{Kind: "sqlite", Path: filepath.Join(dir, "d.db")},
+		Engine: config.EngineConfig{SigningKey: filepath.Join(dir, "k.key")},
+	}, true, config.FlagOverrides{}, func(string) string { return "" })
+	e, l, m, cleanup, err := bootstrap.BuildEngine(eff, io.Discard, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Closing the listener makes srv.Serve(ln) return an accept error that is NOT
+	// http.ErrServerClosed, so serve() returns that error.
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Let any startup goroutines settle, then snapshot the baseline.
+	for i := 0; i < 50 && runtime.NumGoroutine() > 0; i++ {
+		runtime.Gosched()
+	}
+	before := runtime.NumGoroutine()
+
+	// A long revert interval guarantees the ticker exits via serveCtx, never a tick.
+	// The parent ctx is NEVER cancelled: the only thing that can unpark the
+	// goroutines is serve()'s defer cancel() on its own return.
+	serveErr := serve(context.Background(), ln, e, l, m, nil, time.Hour, slog.New(slog.DiscardHandler))
+	if serveErr == nil {
+		t.Fatal("serve must return the non-ErrServerClosed Serve error, got nil")
+	}
+
+	// Poll for the goroutine count to return to baseline. If the shutdown goroutine
+	// (or ticker) leaked, it would stay parked and the count would never drop back.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		runtime.Gosched()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > before {
+		buf := make([]byte, 1<<16)
+		n := runtime.Stack(buf, true)
+		t.Fatalf("serve leaked goroutines: before=%d after=%d (serve err=%v)\n%s", before, got, serveErr, buf[:n])
 	}
 }
 

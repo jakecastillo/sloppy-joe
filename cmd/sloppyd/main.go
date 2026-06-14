@@ -30,23 +30,41 @@ func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.Cos
 	}
 	srv := &http.Server{Handler: h}
 
+	// serveCtx is cancelled either when the parent ctx is cancelled OR when serve
+	// returns (defer cancel). The background goroutines select on serveCtx so they
+	// have a self-contained exit path: if srv.Serve returns a non-ErrServerClosed
+	// error, serve() returns, defer cancel() fires, and neither goroutine stays
+	// parked waiting on a ctx that will never be cancelled.
+	serveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	go func() {
 		ticker := time.NewTicker(revertEvery)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-serveCtx.Done():
 				return
 			case <-ticker.C:
-				runRevertScan(ctx, e, m, logger, time.Now().UTC())
+				runRevertScan(serveCtx, e, m, logger, time.Now().UTC())
 			}
 		}
 	}()
 
 	go func() {
-		<-ctx.Done()
-		shctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		// Wake on either trigger: parent cancel (graceful shutdown wanted) or
+		// serve() returning early (serveCtx cancelled via defer). ctx.Err()
+		// distinguishes them — parent cancel sets it, an early serve return does
+		// not — so a Serve error never blocks this goroutine on a ctx that will
+		// never fire.
+		<-serveCtx.Done()
+		if ctx.Err() == nil {
+			// serve() already returned (e.g. a Serve error): the server is gone,
+			// so there is nothing to drain — just exit.
+			return
+		}
+		shctx, shcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shcancel()
 		_ = srv.Shutdown(shctx)
 	}()
 
