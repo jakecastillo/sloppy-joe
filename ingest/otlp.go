@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +58,9 @@ func parseOTLPUsage(body []byte) ([]usageEvent, error) {
 		return nil, err
 	}
 	var events []usageEvent
+	// One attrs map reused across every datapoint: cleared per iteration instead
+	// of allocating a fresh map in the innermost loop.
+	attrs := make(map[string]string)
 	for _, rm := range doc.ResourceMetrics {
 		for _, sm := range rm.ScopeMetrics {
 			for _, m := range sm.Metrics {
@@ -67,8 +71,11 @@ func parseOTLPUsage(body []byte) ([]usageEvent, error) {
 					if ds == nil {
 						continue
 					}
+					// Presize events from this set's datapoint count so the
+					// append loop below grows the backing array at most once.
+					events = slices.Grow(events, len(ds.DataPoints))
 					for _, dp := range ds.DataPoints {
-						attrs := map[string]string{}
+						clear(attrs)
 						for _, kv := range dp.Attributes {
 							attrs[kv.Key] = kv.Value.StringValue
 						}

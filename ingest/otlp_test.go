@@ -25,6 +25,53 @@ func TestParseOTLPUsageUnit(t *testing.T) {
 	}
 }
 
+// TestParseOTLPUsageMultiDatapoint pins the exact parse output for a batch with
+// several datapoints (input/output types, multiple tenants/models, the `model`
+// fallback key, and a non-token metric that must be skipped). It guards the
+// allocation-reduction refactor — reusing the attrs map and presizing events
+// must not change the produced events.
+func TestParseOTLPUsageMultiDatapoint(t *testing.T) {
+	body := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"metrics":[
+	  {"name":"gen_ai.client.token.usage","sum":{"dataPoints":[
+	    {"asInt":"100","attributes":[
+	      {"key":"gen_ai.token.type","value":{"stringValue":"input"}},
+	      {"key":"tenant","value":{"stringValue":"t1"}},
+	      {"key":"gen_ai.request.model","value":{"stringValue":"m1"}}]},
+	    {"asInt":"200","attributes":[
+	      {"key":"gen_ai.token.type","value":{"stringValue":"output"}},
+	      {"key":"tenant","value":{"stringValue":"t1"}},
+	      {"key":"gen_ai.request.model","value":{"stringValue":"m1"}}]}]}},
+	  {"name":"gen_ai.server.token.usage","gauge":{"dataPoints":[
+	    {"asDouble":300,"attributes":[
+	      {"key":"gen_ai.token.type","value":{"stringValue":"completion"}},
+	      {"key":"tenant","value":{"stringValue":"t2"}},
+	      {"key":"model","value":{"stringValue":"m2"}}]},
+	    {"asInt":"400","attributes":[
+	      {"key":"tenant","value":{"stringValue":"t2"}},
+	      {"key":"model","value":{"stringValue":"m2"}}]}]}},
+	  {"name":"latency.seconds","sum":{"dataPoints":[
+	    {"asInt":"999","attributes":[
+	      {"key":"tenant","value":{"stringValue":"ignore"}}]}]}}]}]}]}`)
+	got, err := parseOTLPUsage(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []usageEvent{
+		{tenant: "t1", model: "m1", input: 100},
+		{tenant: "t1", model: "m1", output: 200},
+		{tenant: "t2", model: "m2", output: 300},
+		{tenant: "t2", model: "m2", input: 400},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("event count: got %d want %d (%+v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("event %d: got %+v want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestOTLPMetricsEndpointFeedsLedger(t *testing.T) {
 	s, l := testServer(t)
 	srv := httptest.NewServer(s.Handler())
