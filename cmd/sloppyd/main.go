@@ -24,7 +24,7 @@ import (
 
 // serve runs the ingest HTTP server + the TTL-revert ticker until ctx is cancelled.
 func serve(ctx context.Context, ln net.Listener, e *engine.Engine, l *ledger.CostLedger, m *metrics.Registry, authz *ee.Authorizer, revertEvery time.Duration, logger *slog.Logger) error {
-	h := ingest.NewServer(e, l).SetMetrics(m).Handler()
+	h := ingest.NewServer(e, ingest.WithLedger(l), ingest.WithMetrics(m)).Handler()
 	if authz != nil {
 		h = authz.Middleware(h)
 	}

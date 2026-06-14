@@ -38,7 +38,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	signer, _ := intent.NewEd25519Signer()
 	l := ledger.New(ledger.PriceBook{"gpt-4o": {InputPer1K: 5, OutputPer1K: 15}}, st)
 	e := engine.New(rec, reg, st, signer, engine.WithLedger(l))
-	return NewServer(e, l), l
+	return NewServer(e, WithLedger(l)), l
 }
 
 func TestIngestHealth(t *testing.T) {

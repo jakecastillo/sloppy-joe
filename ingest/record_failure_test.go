@@ -76,7 +76,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	)
 	e := engine.New(rec, reg, st, signer, engine.WithLedger(l))
 	m := metrics.New()
-	return NewServer(e, l).SetMetrics(m), m
+	return NewServer(e, WithLedger(l), WithMetrics(m)), m
 }
 
 func otlpDatapoint(tenant, ttype string, asInt string) string {

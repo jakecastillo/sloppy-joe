@@ -36,7 +36,7 @@ then: [ { route_override: { alias: gpt-4o, to: ollama/llama3 } } ]
 	reg.Register(&actuator.Log{W: io.Discard})
 	signer, _ := intent.NewEd25519Signer()
 	e := engine.New(rec, reg, st, signer)
-	return NewServer(e, nil) // nil ledger -> /v1/usage and /v1/otlp/metrics disabled
+	return NewServer(e) // no ledger -> /v1/usage and /v1/otlp/metrics disabled
 }
 
 // TestIngestRejectsNonPostMethods pins the 405 branch on every mutating handler:
