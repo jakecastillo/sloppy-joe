@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/google/cel-go/cel"
@@ -55,7 +56,7 @@ func (c *Condition) Eval(sig core.Signal, state map[string]any) (bool, error) {
 	}
 	b, ok := out.Value().(bool)
 	if !ok {
-		return false, fmt.Errorf("rules: condition did not return bool")
+		return false, errors.New("rules: condition did not return bool")
 	}
 	return b, nil
 }
