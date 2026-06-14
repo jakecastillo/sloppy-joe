@@ -150,7 +150,7 @@ curl localhost:8723/status
 - **Verifiable signatures:** intents are ed25519-signed; the applied-audit entry persists the signed canonical bytes + full signature. `sloppy audit --verify-sigs` recomputes each intent's canonical bytes and verifies the signature against the persisted public key (`sloppy.key.pub`), exiting non-zero on any failure. The private key (`sloppy.key`, mode `0600`) is required to forge a verifiable intent; a holder of only the public key can verify authenticity and detect tampering but cannot sign. See [`SECURITY.md`](SECURITY.md) for the threat model.
 - **State backend:** `sloppyd --store sqlite` (default) or `--store redis --redis-addr host:6379`.
 - **Auth:** `sloppyd --auth` with `SLOPPY_API_KEYS="key1=ingest:write,status:read"`.
-- **Gateway:** to wire a real LiteLLM admin API, set `SLOPPY_LITELLM_URL` and `SLOPPY_TOKEN_LITELLM`.
+- **Gateway:** to wire a real LiteLLM admin API, set `SLOPPY_LITELLM_URL` and `SLOPPY_TOKEN_LITELLM`. Copy-paste wiring for every gateway/sink/source (LiteLLM · GitHub · Slack · OTLP) → [`docs/integrations.md`](docs/integrations.md).
 - **`for:` windows:** one-shot `sloppy inject --now` fires immediately; the `sloppyd` daemon evaluates `for:` windows across the live signal stream.
 - **Gate rules in CI (no infra):** `sloppy rules validate ./rules` compiles every CEL `when`, checks action kinds + `intent_budget`, and exits non-zero on error — drop it in a PR check.
 
