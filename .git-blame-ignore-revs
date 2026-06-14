@@ -1,0 +1,5 @@
+# Revs to skip in `git blame` (bulk reformat, no semantic change).
+# Local: git config blame.ignoreRevsFile .git-blame-ignore-revs   (GitHub honors it automatically)
+
+# style: gofumpt + gci + yamlfmt + shfmt (whole tree)
+80a8c104ff0917cc91446894c9f88c052da282cc
