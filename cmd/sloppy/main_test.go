@@ -25,6 +25,23 @@ func TestRunUnknown(t *testing.T) {
 	}
 }
 
+func TestRunHelp(t *testing.T) {
+	for _, arg := range []string{"help", "-h", "--help"} {
+		t.Run(arg, func(t *testing.T) {
+			var out bytes.Buffer
+			if code := run([]string{arg}, &out); code != 0 {
+				t.Fatalf("%q: exit %d, want 0: %s", arg, code, out.String())
+			}
+			if got := out.String(); !strings.Contains(got, "usage: sloppy") {
+				t.Fatalf("%q: missing usage: %q", arg, got)
+			}
+			if strings.Contains(out.String(), "unknown command") {
+				t.Fatalf("%q: should not print 'unknown command': %q", arg, out.String())
+			}
+		})
+	}
+}
+
 func TestInjectThenAudit(t *testing.T) {
 	dir := t.TempDir()
 	rulesDir := filepath.Join(dir, "rules")
