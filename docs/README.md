@@ -14,6 +14,7 @@ it's built).
 | Doc | What's in it |
 |---|---|
 | [`../README.md`](../README.md) | The one-liner, the architecture diagrams, and the quickstart. |
+| [`quickstart.md`](quickstart.md) | A 5-minute, no-infra walkthrough threading the whole loop with the shipped CLI + examples — `init` → `recipe show` → `test --replay` → `inject` → `audit`. |
 | [`integrations.md`](integrations.md) | Copy-paste quickstart to wire each gateway/sink/source — LiteLLM, GitHub, Slack, OTLP metrics — env vars + `platforms:` enable block + exact `curl`. |
 | [`../examples/`](../examples/) | Runnable CEL rules, a sample signal, and a replay fixture — the fastest way to watch a rule fire. |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | How to build and test, and the bar every change must clear. |
