@@ -51,6 +51,71 @@ curl localhost:8723/status
 
 ---
 
+## Generic webhook (gateway — `route_override`)
+
+The generic-webhook actuator drives any gateway or receiver that accepts a simple
+JSON control call — a homegrown gateway, or a thin shim in front of one without a
+dedicated adapter. Apply `POST`s `<url>/route` with `{"model": <target>, "to": <dest>}`
+(bearer-authed); Revert restores the self-route.
+
+**Env vars:**
+
+```bash
+export SLOPPY_TOKEN_WEBHOOK=...   # bearer token your receiver accepts (the secret)
+```
+
+**Enable block** (`sloppy.yaml` under `platforms:`):
+
+```yaml
+platforms:
+  webhook: { enabled: true, url: http://localhost:9000, token_env: SLOPPY_TOKEN_WEBHOOK }
+```
+
+**Prove it** — fire a signal whose rule reroutes, then read `/status`:
+
+```bash
+curl -XPOST localhost:8723/v1/signals -d @examples/signals/cost-spike.json
+curl localhost:8723/status
+```
+
+---
+
+## Cloudflare AI Gateway (gateway — `throttle_tenant` / `disable_deployment`)
+
+The Cloudflare actuator throttles or disables a Cloudflare AI Gateway via its admin
+REST API (a single authenticated `PUT`). Apply pins `rate_limiting_limit=0` (no
+requests admitted); Revert restores the prior limit (`intent.Args["prior_limit"]`, else
+a conservative default). The `url` embeds the account-scoped collection path and
+`intent.Target` is the gateway id appended as the final path segment. Auth is a
+Cloudflare API token sent as `Authorization: Bearer`.
+
+**Env vars:**
+
+```bash
+export SLOPPY_TOKEN_CLOUDFLARE=...   # Cloudflare API token (the secret)
+```
+
+**Enable block** (`sloppy.yaml` under `platforms:`):
+
+```yaml
+platforms:
+  cloudflare:
+    enabled: true
+    url: https://api.cloudflare.com/client/v4/accounts/<account_id>/ai-gateway/gateways
+    token_env: SLOPPY_TOKEN_CLOUDFLARE
+```
+
+**Prove it** — Cloudflare acts on `throttle_tenant` / `disable_deployment` intents, so
+enable a rule that emits one (the shipped `cost-runaway` recipe throttles a tenant on
+extreme spend), then drive the matching signal and read `/status`:
+
+```bash
+curl -XPOST localhost:8723/v1/signals -d @examples/signals/cost-spike.json
+curl localhost:8723/status
+```
+
+---
+
 ## GitHub (sink — open an issue)
 
 The GitHub actuator opens an issue as the incident record (carrying the intent id
