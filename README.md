@@ -14,6 +14,7 @@ A cost / eval / guardrail breach spawns a governed, capability-scoped, audited r
 # one-shot: run a signal through your rules now (acts, then writes the audit)
 $ sloppy inject --now --rules examples/rules examples/signals/cost-spike.json
   applied            route_override target=gpt-4o
+  applied            open_issue target=gpt-4o
   applied            page target=gpt-4o
 
 # CI gate: replay a fixture and see what WOULD fire (no side effects)
