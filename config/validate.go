@@ -18,6 +18,7 @@ func (p Problem) String() string { return fmt.Sprintf("%s: %s", p.Path, p.Msg) }
 // knownPlatforms are the actuator/gateway/notifier names the bootstrap builder wires.
 var knownPlatforms = map[string]bool{
 	"litellm": true, "bifrost": true, "envoy": true, "github": true, "slack": true,
+	"webhook": true, "cloudflare": true,
 }
 
 // secretPatterns match values that look like live credentials and must NEVER be
@@ -91,7 +92,7 @@ func Validate(f File) []Problem {
 	for name, p := range f.Platforms {
 		base := "platforms." + name
 		if !knownPlatforms[name] {
-			add(base, fmt.Sprintf("unknown platform %q (want litellm|bifrost|envoy|github|slack)", name))
+			add(base, fmt.Sprintf("unknown platform %q (want litellm|bifrost|envoy|webhook|cloudflare|github|slack)", name))
 		}
 		// Secret hygiene: non-secret identifier fields must not carry inline credentials.
 		for field, val := range map[string]string{
