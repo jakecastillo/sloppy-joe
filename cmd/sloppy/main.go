@@ -23,12 +23,17 @@ import (
 	"github.com/sloppyjoe/sloppy/state"
 )
 
+const usageLine = "usage: sloppy <init|version|inject|rules|audit|test|doctor|config|platform|recipe>"
+
 func run(args []string, out io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(out, "usage: sloppy <init|version|inject|rules|audit|test|doctor|config|platform|recipe>")
+		fmt.Fprintln(out, usageLine)
 		return 2
 	}
 	switch args[0] {
+	case "help", "-h", "--help":
+		fmt.Fprintln(out, usageLine)
+		return 0
 	case "init":
 		return cmdInit(args[1:], out)
 	case "version":
