@@ -113,7 +113,10 @@ func applyDefaults(f *File) {
 		f.Version = 1
 	}
 	if f.Server.Addr == "" {
-		f.Server.Addr = ":8723"
+		// Loopback by default so a bare `sloppyd` (no --auth) passes the bind guard
+		// and works out of the box. Exposing on all interfaces requires --addr :8723
+		// --auth (the bind guard refuses an unauthenticated network-reachable bind).
+		f.Server.Addr = "127.0.0.1:8723"
 	}
 	if f.Server.RevertInterval == "" {
 		f.Server.RevertInterval = "30s"
