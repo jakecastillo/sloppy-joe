@@ -48,16 +48,39 @@ func (r *Registry) Get(name string) int64 {
 
 // Snapshot returns a copy of all counters. When the registry is empty it
 // returns a shared empty map without allocating; otherwise callers get an
-// independent copy.
+// independent copy. It delegates to SnapshotInto with a fresh map, so each
+// caller keeps an independent result.
 func (r *Registry) Snapshot() map[string]int64 {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.m) == 0 {
+	out := r.SnapshotInto(make(map[string]int64))
+	if len(out) == 0 {
+		// Preserve the shared, never-mutated empty map for the routinely-polled
+		// empty case so Snapshot stays allocation-free there.
 		return emptySnapshot
 	}
-	out := make(map[string]int64, len(r.m))
-	for k, v := range r.m {
-		out[k] = v
-	}
 	return out
+}
+
+// SnapshotInto clears dst and refills it with the current counters under the
+// existing mutex, returning the same content Snapshot() would. It lets a
+// long-lived caller (the routinely-polled /status handler) reuse one buffer
+// across calls instead of churning a fresh map per request, so the steady state
+// is allocation-free. dst may be nil, in which case a fresh map is allocated.
+// Callers only read from the returned map; it is the same instance as dst (when
+// non-nil), so the caller can reuse it on the next call.
+func (r *Registry) SnapshotInto(dst map[string]int64) map[string]int64 {
+	if dst == nil {
+		dst = map[string]int64{}
+	}
+	for k := range dst {
+		delete(dst, k)
+	}
+	if r == nil {
+		return dst
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k, v := range r.m {
+		dst[k] = v
+	}
+	return dst
 }
