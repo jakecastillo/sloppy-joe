@@ -158,7 +158,7 @@ func runRevertScan(ctx context.Context, e *engine.Engine, m *metrics.Registry, l
 
 func main() {
 	cfgPath := flag.String("config", "sloppy.yaml", "path to sloppy.yaml")
-	addr := flag.String("addr", ":8723", "listen address")
+	addr := flag.String("addr", "127.0.0.1:8723", "listen address (loopback by default; use --addr :8723 --auth to expose on all interfaces)")
 	rulesPath := flag.String("rules", "rules", "rules dir or file")
 	dbPath := flag.String("db", "sloppy.db", "sqlite db path")
 	pricebookPath := flag.String("pricebook", "", "price book yaml (optional)")
