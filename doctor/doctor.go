@@ -3,6 +3,7 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -26,6 +27,14 @@ type Check struct {
 func CheckRules(path string) Check {
 	rs, err := config.LoadRules(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Replace the raw OS syscall text (e.g. "GetFileAttributesEx
+			// rules: The system cannot find the file specified.") with an
+			// actionable message naming the path and the --rules remedy.
+			return Check{"rules", false, fmt.Sprintf(
+				"rules path %s not found; create it and add *.yaml rule files, "+
+					"or point at an existing one with --rules <dir|file>", path)}
+		}
 		return Check{"rules", false, err.Error()}
 	}
 	return Check{"rules", true, fmt.Sprintf("%d rule(s) loaded", len(rs))}
