@@ -1,4 +1,4 @@
-.PHONY: test test-race cover build fmt fmt-check vet lint lint-actions vulncheck tidy ci hooks
+.PHONY: test test-race cover build fmt fmt-check vet lint lint-actions vulncheck tidy ci hooks demo
 
 # Pinned tool versions (mirror CI; no @latest drift).
 GOLANGCI_VERSION   ?= v2.12.2
@@ -32,6 +32,27 @@ cover:
 build:
 	CGO_ENABLED=0 go build -o bin/sloppy ./cmd/sloppy
 	CGO_ENABLED=0 go build -o bin/sloppyd ./cmd/sloppyd
+
+# End-to-end observe->act->audit demo on the SHIPPED examples, in a throwaway temp
+# dir (no repo files touched). Builds the CLI, injects the cost-spike signal against
+# examples/rules to fire+sign intents, then tails and signature-verifies the audit
+# chain. Guarded at 60s so it stays a fast smoke test. `trap` cleans the temp dir on
+# any exit. Run with: make demo
+demo: build
+	@set -e; \
+	d=$$(mktemp -d 2>/dev/null || mktemp -d -t sloppy-demo); \
+	trap 'rm -rf "$$d"' EXIT; \
+	echo "== sloppy demo (temp dir: $$d) =="; \
+	echo "-- inject (observe -> act): firing examples/rules on the cost-spike signal"; \
+	timeout 60 ./bin/sloppy inject --now \
+		--rules examples/rules \
+		--db "$$d/sloppy.db" --key "$$d/sloppy.key" \
+		examples/signals/cost-spike.json; \
+	echo "-- audit tail (the signed, hash-chained record of what fired)"; \
+	timeout 60 ./bin/sloppy audit tail --db "$$d/sloppy.db" --key "$$d/sloppy.key"; \
+	echo "-- audit --verify-sigs (re-verify every intent signature)"; \
+	timeout 60 ./bin/sloppy audit --verify-sigs --db "$$d/sloppy.db" --key "$$d/sloppy.key"; \
+	echo "== demo OK: a rule fired, was acted on, and the audit chain verified =="
 
 # Format every file type: Go (gofumpt+gci), YAML, shell hooks.
 fmt:

@@ -8,8 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sloppyjoe/sloppy/config"
+	"github.com/sloppyjoe/sloppy/core"
 	"github.com/sloppyjoe/sloppy/doctor"
 	"github.com/sloppyjoe/sloppy/ledger"
+	"github.com/sloppyjoe/sloppy/replay"
+	"github.com/sloppyjoe/sloppy/rules"
 )
 
 // init_test calls cmdInit directly (not via run) so it does not depend on the
@@ -52,8 +56,9 @@ func TestInitScaffoldNoClobberAndValidates(t *testing.T) {
 }
 
 // TestInitCreatesRulesDir asserts the scaffold's `rules: [./rules]` resolves: init
-// creates the directory plus a commented sample, and doctor's rules check passes on
-// it (an empty rules dir is informational, not a failure).
+// creates the directory with an ACTIVE starter.yaml (so the install is not a
+// no-rule-fired dead-end) plus a commented *.yaml.sample authoring template the
+// loader ignores, and doctor's rules check passes on it.
 func TestInitCreatesRulesDir(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "sloppy.yaml")
@@ -68,8 +73,12 @@ func TestInitCreatesRulesDir(t *testing.T) {
 	if err != nil || !info.IsDir() {
 		t.Fatalf("init should create %s as a directory: err=%v", rulesDir, err)
 	}
-	// The starter sample must NOT be a loadable rule file (so the dir stays "empty"
-	// from the loader's view and doctor doesn't trip on an unparseable sample).
+	// An ACTIVE starter rule must be present so minute one fires something.
+	if _, err := os.Stat(filepath.Join(rulesDir, "starter.yaml")); err != nil {
+		t.Fatalf("init should write an active starter.yaml: %v", err)
+	}
+	// The commented sample must NOT be a loadable rule file (the loader skips
+	// non-.yaml/.yml so doctor doesn't trip on the unparseable template).
 	if _, err := os.Stat(filepath.Join(rulesDir, "example.yaml.sample")); err != nil {
 		t.Fatalf("init should drop a commented sample: %v", err)
 	}
@@ -77,6 +86,58 @@ func TestInitCreatesRulesDir(t *testing.T) {
 	// Doctor's rules check on the fresh scaffold dir must pass.
 	if c := doctor.CheckRules(rulesDir); !c.OK {
 		t.Fatalf("doctor rules check should pass on fresh scaffold: %+v", c)
+	}
+}
+
+// TestInitStarterRuleFiresImmediately is the core of the dead-end fix: the active
+// starter rule init scaffolds must actually fire on a matching cost.budget_burn
+// signal (instead of the old "no rule fired" cold start). It loads the scaffolded
+// rules dir, validates the starter rule, and replays the shipped example signal
+// through the reconciler to confirm at least one intent matches.
+func TestInitStarterRuleFiresImmediately(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "sloppy.yaml")
+
+	var out bytes.Buffer
+	if rc := cmdInit([]string{"--config", cfg}, &out); rc != 0 {
+		t.Fatalf("init rc=%d out=%s", rc, out.String())
+	}
+	rulesDir := filepath.Join(dir, "rules")
+
+	// The scaffolded rules dir must load at least one ACTIVE rule, and each must
+	// validate (good CEL predicate + known action kinds).
+	rs, err := config.LoadRules(rulesDir)
+	if err != nil {
+		t.Fatalf("scaffolded rules dir should load an active rule: %v", err)
+	}
+	if len(rs) == 0 {
+		t.Fatalf("scaffolded rules dir loaded 0 rules — minute one is still a dead-end")
+	}
+	for i, r := range rs {
+		if err := rules.Validate(r); err != nil {
+			t.Fatalf("scaffolded rule %d should validate: %v", i, err)
+		}
+	}
+
+	// Replay the shipped cost-spike signal through the reconciler: the starter rule
+	// must produce at least one intent, proving the cold start now fires.
+	rec, err := rules.NewReconciler(rs)
+	if err != nil {
+		t.Fatalf("reconciler: %v", err)
+	}
+	sig := core.Signal{
+		Type:           "cost.budget_burn",
+		CorrelationKey: "acme:cost",
+		Subject:        core.Subject{Alias: "gpt-4o"},
+		Data:           map[string]any{"spend_1h_usd": 9.0},
+	}
+	res := replay.Run(rec, []core.Signal{sig})
+	fired := 0
+	for _, r := range res {
+		fired += len(r.Intents)
+	}
+	if fired == 0 {
+		t.Fatalf("starter rule should fire on the cost-spike signal but produced 0 intents")
 	}
 }
 
