@@ -1,5 +1,12 @@
 # 🥪 Sloppy Joe
 
+[![CI](https://github.com/jakecastillo/sloppy-joe/actions/workflows/ci.yml/badge.svg)](https://github.com/jakecastillo/sloppy-joe/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/jakecastillo/sloppy-joe/actions/workflows/codeql.yml/badge.svg)](https://github.com/jakecastillo/sloppy-joe/actions/workflows/codeql.yml)
+[![Release](https://github.com/jakecastillo/sloppy-joe/actions/workflows/release.yml/badge.svg)](https://github.com/jakecastillo/sloppy-joe/actions/workflows/release.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+**[Install](#install)** · **[Quickstart](#quickstart)** · **[Architecture](#architecture)** · **[Docs](docs/README.md)** · **[Security](SECURITY.md)** · **[License](#license)**
+
 **Serving governed AI ops.** Sloppy Joe is an open-source, model-agnostic **control loop** that cleans up the slop of running AI in production. It sits *on top of* the LLM gateway you already run and turns model-layer signals — cost spikes, fallback storms, latency/quality regressions, guardrail trips, provider outages — into **governed, audited, Git-reviewed automated responses**.
 
 > It is **not** another LLM gateway. It's the observe → decide → act loop that gateways and generic automation tools leave as a gap you currently fill with duct tape (n8n + a budget cron + Grafana alerts).
@@ -104,6 +111,56 @@ flowchart LR
 ```
 
 > Everything in this diagram is implemented and tested.
+
+## Install
+
+The [latest release](https://github.com/jakecastillo/sloppy-joe/releases/latest)
+ships **signed, SBOM-attached** static binaries (CGO-free) for Linux, macOS, and
+Windows on `amd64` + `arm64`. Pick whichever path fits.
+
+**Download a release archive.** Grab the archive for your OS/arch from the
+[releases page](https://github.com/jakecastillo/sloppy-joe/releases) — it's named
+`sloppy-joe_VERSION_OS_ARCH.tar.gz` (`.zip` on Windows) and bundles both the
+`sloppy` CLI and the `sloppyd` daemon plus an SBOM. For example:
+
+```bash
+VERSION=0.1.0 OS=linux ARCH=amd64
+curl -fsSLO "https://github.com/jakecastillo/sloppy-joe/releases/download/v${VERSION}/sloppy-joe_${VERSION}_${OS}_${ARCH}.tar.gz"
+tar -xzf "sloppy-joe_${VERSION}_${OS}_${ARCH}.tar.gz"
+./sloppy --version && ./sloppyd --version
+```
+
+**Verify before you trust it.** Every release publishes a `checksums.txt` plus a
+keyless [cosign](https://docs.sigstore.dev/) signature over it
+(`checksums.txt.sig` + `checksums.txt.pem`). Verify the signature, then verify your
+archive against the (now-trusted) checksums:
+
+```bash
+# fetch the checksums and their cosign signature + certificate
+curl -fsSLO "https://github.com/jakecastillo/sloppy-joe/releases/download/v${VERSION}/checksums.txt"
+curl -fsSLO "https://github.com/jakecastillo/sloppy-joe/releases/download/v${VERSION}/checksums.txt.sig"
+curl -fsSLO "https://github.com/jakecastillo/sloppy-joe/releases/download/v${VERSION}/checksums.txt.pem"
+
+# 1. verify the keyless signature (built by the Release workflow via GitHub OIDC)
+cosign verify-blob checksums.txt \
+  --signature checksums.txt.sig \
+  --certificate checksums.txt.pem \
+  --certificate-identity-regexp "^https://github.com/jakecastillo/sloppy-joe/.github/workflows/release.yml@" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
+# 2. now that checksums.txt is trusted, verify your archive against it
+sha256sum --check --ignore-missing checksums.txt
+```
+
+**`go install` from source.** If you have a Go toolchain, install either binary
+straight from the module:
+
+```bash
+go install github.com/sloppyjoe/sloppy/cmd/sloppy@latest
+go install github.com/sloppyjoe/sloppy/cmd/sloppyd@latest
+```
+
+**Build from source.** Clone the repo and run the [Quickstart](#quickstart) below.
 
 The runtime loop — **observe → decide → act → record → revert** — all off the request hot path:
 

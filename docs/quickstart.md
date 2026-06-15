@@ -9,6 +9,13 @@ written against the SQLite default.
 > The full copy-paste wiring for a *real* LiteLLM / GitHub / Slack / OTLP setup lives
 > in [`integrations.md`](integrations.md) — this page deliberately stays zero-config.
 
+## Install or build
+
+If you just want the binaries, install them first — the
+[README **Install** section](../README.md#install) covers the signed release
+archives (download + cosign verify) and `go install`. This walkthrough then drives
+the binaries you build from source below, so the `examples/` paths resolve.
+
 ## Build the two binaries
 
 ```bash
