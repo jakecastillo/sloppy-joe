@@ -156,6 +156,31 @@ func TestBindGuard(t *testing.T) {
 	}
 }
 
+// The documented bare command — `sloppyd --rules examples/rules`, no --addr and no
+// --auth — must start out of the box: with no config file and no addr override the
+// effective addr resolves to the loopback default (127.0.0.1:8723), which the
+// UNCHANGED bind guard accepts. A non-loopback bind without --auth is still refused,
+// so defaulting to loopback did not weaken the guard.
+func TestDefaultAddrPassesBindGuard(t *testing.T) {
+	// existed=false (no file), no flag overrides: exactly the bare-command path.
+	eff := config.Resolve(config.File{}, false, config.FlagOverrides{}, func(string) string { return "" })
+
+	if eff.Server.Addr != "127.0.0.1:8723" {
+		t.Fatalf("default addr must be the loopback default, got %q", eff.Server.Addr)
+	}
+	if !addrIsLoopback(eff.Server.Addr) {
+		t.Fatalf("default addr %q must be loopback", eff.Server.Addr)
+	}
+	if err := checkBindAuth(eff.Server.Addr, eff.Auth.Enabled); err != nil {
+		t.Fatalf("bare sloppyd (no --auth) must pass the bind guard on the default addr, got: %v", err)
+	}
+
+	// Guard unchanged: an explicit all-interfaces bind without --auth is still refused.
+	if err := checkBindAuth(":8723", false); err == nil {
+		t.Fatal("non-loopback bind without --auth must still be refused (guard unchanged)")
+	}
+}
+
 // Startup must LOUDLY distinguish the three auth states so an operator never
 // silently runs an open control plane (or an auth-on-but-no-keys lockout).
 func TestAuthStateStartupLog(t *testing.T) {
