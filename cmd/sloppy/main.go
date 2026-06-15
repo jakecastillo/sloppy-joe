@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -138,6 +139,7 @@ func cmdAudit(args []string, out io.Writer) int {
 	keyPath := fs.String("key", "sloppy.key", "signing key whose <key>.pub verifies signatures (--verify-sigs)")
 	pubPath := fs.String("pubkey", "", "explicit public key file (defaults to <key>.pub)")
 	verifySigs := fs.Bool("verify-sigs", false, "verify each persisted intent signature against the public key")
+	asJSON := fs.Bool("json", false, "emit machine-readable JSON (seq/kind/detail/sigVerified) instead of the human table")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -159,11 +161,24 @@ func cmdAudit(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
 	}
+	chainOK := st.VerifyAudit(context.Background())
+	if *asJSON {
+		// Machine-readable view over state.AuditEntry: seq/kind/detail plus a
+		// per-entry signature status. The chain-tamper exit semantics are kept so
+		// `--json` stays a usable CI gate, but no human lines are printed.
+		if err := emitAuditJSON(out, entries, *keyPath, *pubPath); err != nil {
+			fmt.Fprintf(out, "error: %v\n", err)
+			return 1
+		}
+		if !chainOK {
+			return 1
+		}
+		return 0
+	}
 	for _, e := range entries {
 		fmt.Fprintf(out, "%4d  %-16s  %s\n", e.Seq, e.Kind, e.Detail)
 	}
 	status := "verified ✓"
-	chainOK := st.VerifyAudit(context.Background())
 	if !chainOK {
 		status = "TAMPERED ✗"
 	}
@@ -217,6 +232,43 @@ func verifyAuditSigs(out io.Writer, entries []state.AuditEntry, keyPath, pubPath
 	return 0
 }
 
+// auditEntryJSON is the machine-readable projection of state.AuditEntry for
+// `audit tail --json`: the stable fields plus a tri-state signature status.
+// SigVerified is a *bool so the JSON distinguishes verified (true), failed
+// (false), and "no signature to check / no key available" (null).
+type auditEntryJSON struct {
+	Seq         int    `json:"seq"`
+	Kind        string `json:"kind"`
+	Detail      string `json:"detail"`
+	SigVerified *bool  `json:"sigVerified"`
+}
+
+// emitAuditJSON writes the audit entries as a JSON array over state.AuditEntry.
+// When the verifier public key loads, each signed entry's signature is checked
+// and reported per entry; unsigned entries (and every entry when no key is
+// available) report null, so the output never falsely claims an unverifiable
+// entry was verified.
+func emitAuditJSON(out io.Writer, entries []state.AuditEntry, keyPath, pubPath string) error {
+	if pubPath == "" {
+		pubPath = intent.PublicKeyPath(keyPath)
+	}
+	pub, keyErr := intent.LoadVerifierKey(pubPath)
+	rows := make([]auditEntryJSON, 0, len(entries))
+	for _, e := range entries {
+		row := auditEntryJSON{Seq: e.Seq, Kind: e.Kind, Detail: e.Detail}
+		if keyErr == nil {
+			if ok, found := intent.VerifyAuditDetail(pub, e.Detail); found {
+				v := ok
+				row.SigVerified = &v
+			}
+		}
+		rows = append(rows, row)
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(rows)
+}
+
 // registryFromConfig builds the actuator registry from sloppy.yaml (zero-config if
 // absent) plus the environment, via the shared bootstrap builder — the same wiring
 // sloppyd uses, so the CLI and daemon agree on which platforms are enabled.
@@ -236,6 +288,7 @@ func cmdTest(args []string, out io.Writer) int {
 	fs.SetOutput(out)
 	rulesPath := fs.String("rules", "rules", "rules dir or file")
 	fixture := fs.String("replay", "", "JSONL fixture of signals to replay")
+	asJSON := fs.Bool("json", false, "emit machine-readable JSON (signalID/matched/intents) instead of the human table")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -260,8 +313,16 @@ func cmdTest(args []string, out io.Writer) int {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
 	}
+	results := replay.Run(rec, sigs)
+	if *asJSON {
+		if err := emitReplayJSON(out, results); err != nil {
+			fmt.Fprintf(out, "error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	fired := 0
-	for _, r := range replay.Run(rec, sigs) {
+	for _, r := range results {
 		if !r.Matched {
 			fmt.Fprintf(out, "%-14s (no rule)\n", r.SignalID)
 			continue
@@ -273,6 +334,42 @@ func cmdTest(args []string, out io.Writer) int {
 	}
 	fmt.Fprintf(out, "replay: %d signal(s), %d intent(s) would fire\n", len(sigs), fired)
 	return 0
+}
+
+// replayResultJSON is the machine-readable projection of replay.Result for
+// `test --replay --json`: the signal id, whether any rule matched, and the
+// intents that would fire (each as rule/kind/target).
+type replayResultJSON struct {
+	SignalID string             `json:"signalID"`
+	Matched  bool               `json:"matched"`
+	Intents  []replayIntentJSON `json:"intents"`
+}
+
+type replayIntentJSON struct {
+	Rule   string `json:"rule"`
+	Kind   string `json:"kind"`
+	Target string `json:"target"`
+}
+
+// emitReplayJSON writes the dry-run results as a JSON array over replay.Result.
+// Intents is always a (possibly empty) array, never null, so consumers can index
+// it without a nil check.
+func emitReplayJSON(out io.Writer, results []replay.Result) error {
+	rows := make([]replayResultJSON, 0, len(results))
+	for _, r := range results {
+		row := replayResultJSON{
+			SignalID: r.SignalID,
+			Matched:  r.Matched,
+			Intents:  make([]replayIntentJSON, 0, len(r.Intents)),
+		}
+		for _, f := range r.Intents {
+			row.Intents = append(row.Intents, replayIntentJSON{Rule: f.Rule, Kind: f.Kind, Target: f.Target})
+		}
+		rows = append(rows, row)
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(rows)
 }
 
 // cmdDoctor runs connectivity/capability checks.
