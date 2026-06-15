@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -176,5 +177,185 @@ with: { dry_run: false }
 	}
 	if !strings.Contains(out3.String(), "verified") {
 		t.Fatalf("audit should verify chain: %s", out3.String())
+	}
+}
+
+// audit tail --json must emit a valid JSON array over state.AuditEntry
+// (seq/kind/detail/sigVerified), with no human chain/table lines, and report a
+// verified signature for the applied intent (the key written by inject lives at
+// <db-dir>/sloppy.key.pub via the default --key).
+func TestAuditTailJSON(t *testing.T) {
+	dir := t.TempDir()
+	rulesDir := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rulesDir, "cost.yaml"), []byte(`
+on: cost.budget_burn
+when: signal.data.spend_1h_usd > 5.0
+then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]
+with: { dry_run: false }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sigPath := filepath.Join(dir, "sig.json")
+	if err := os.WriteFile(sigPath, []byte(`{"type":"cost.budget_burn","correlation_key":"acme:cost","subject":{"alias":"gpt-4o"},"data":{"spend_1h_usd":9.0}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "s.db")
+	key := filepath.Join(dir, "sloppy.key")
+
+	var out bytes.Buffer
+	if code := run([]string{"inject", "--rules", rulesDir, "--db", db, "--key", key, sigPath}, &out); code != 0 {
+		t.Fatalf("inject exit nonzero: %s", out.String())
+	}
+
+	var jout bytes.Buffer
+	if code := run([]string{"audit", "tail", "--db", db, "--key", key, "--json"}, &jout); code != 0 {
+		t.Fatalf("audit --json exit nonzero: %s", jout.String())
+	}
+	got := jout.String()
+	// Human default lines must NOT leak into --json output.
+	if strings.Contains(got, "chain:") {
+		t.Fatalf("--json must not print the human chain line: %q", got)
+	}
+
+	type row struct {
+		Seq         int    `json:"seq"`
+		Kind        string `json:"kind"`
+		Detail      string `json:"detail"`
+		SigVerified *bool  `json:"sigVerified"`
+	}
+	var rows []row
+	if err := json.Unmarshal(jout.Bytes(), &rows); err != nil {
+		t.Fatalf("audit --json is not valid JSON: %v\n%s", err, got)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("audit --json should emit at least one entry: %q", got)
+	}
+	// The applied-intent entry must carry a verified signature (true), and the
+	// projected fields must be populated.
+	sawVerified := false
+	for _, r := range rows {
+		if r.Kind == "" {
+			t.Fatalf("row missing kind: %+v", r)
+		}
+		if r.SigVerified != nil && *r.SigVerified {
+			sawVerified = true
+		}
+	}
+	if !sawVerified {
+		t.Fatalf("expected at least one entry with sigVerified=true: %q", got)
+	}
+}
+
+// test --replay --json must emit a valid JSON array over replay.Result
+// (signalID/matched/intents) covering both a matching and a non-matching signal.
+func TestTestReplayJSON(t *testing.T) {
+	dir := t.TempDir()
+	rulesDir := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rulesDir, "cost.yaml"), []byte(`
+on: cost.budget_burn
+when: signal.data.spend_1h_usd > 5.0
+then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]
+with: { dry_run: false }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(dir, "fixture.jsonl")
+	lines := strings.Join([]string{
+		`{"id":"hit","type":"cost.budget_burn","correlation_key":"acme:cost","subject":{"alias":"gpt-4o"},"data":{"spend_1h_usd":9.0}}`,
+		`{"id":"miss","type":"cost.budget_burn","correlation_key":"acme:cost","subject":{"alias":"gpt-4o"},"data":{"spend_1h_usd":1.0}}`,
+	}, "\n")
+	if err := os.WriteFile(fixture, []byte(lines+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if code := run([]string{"test", "--replay", fixture, "--rules", rulesDir, "--json"}, &out); code != 0 {
+		t.Fatalf("test --replay --json exit nonzero: %s", out.String())
+	}
+	got := out.String()
+	if strings.Contains(got, "replay:") {
+		t.Fatalf("--json must not print the human summary line: %q", got)
+	}
+
+	type intent struct {
+		Rule   string `json:"rule"`
+		Kind   string `json:"kind"`
+		Target string `json:"target"`
+	}
+	type result struct {
+		SignalID string   `json:"signalID"`
+		Matched  bool     `json:"matched"`
+		Intents  []intent `json:"intents"`
+	}
+	var results []result
+	if err := json.Unmarshal(out.Bytes(), &results); err != nil {
+		t.Fatalf("test --replay --json is not valid JSON: %v\n%s", err, got)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d: %q", len(results), got)
+	}
+	byID := map[string]result{}
+	for _, r := range results {
+		byID[r.SignalID] = r
+	}
+	hit, ok := byID["hit"]
+	if !ok {
+		t.Fatalf("missing 'hit' result: %q", got)
+	}
+	if !hit.Matched || len(hit.Intents) != 1 {
+		t.Fatalf("'hit' should match with one intent: %+v", hit)
+	}
+	if hit.Intents[0].Kind == "" || hit.Intents[0].Target == "" || hit.Intents[0].Rule == "" {
+		t.Fatalf("'hit' intent fields should be populated: %+v", hit.Intents[0])
+	}
+	miss, ok := byID["miss"]
+	if !ok {
+		t.Fatalf("missing 'miss' result: %q", got)
+	}
+	if miss.Matched {
+		t.Fatalf("'miss' should not match: %+v", miss)
+	}
+	// Intents must serialize as an empty array, never null.
+	if miss.Intents == nil {
+		t.Fatalf("'miss' intents should be [] not null: %q", got)
+	}
+}
+
+// The human default output of both commands must be unchanged when --json is
+// absent (guards against accidentally always-JSON behavior).
+func TestReplayHumanDefaultUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	rulesDir := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rulesDir, "cost.yaml"), []byte(`
+on: cost.budget_burn
+when: signal.data.spend_1h_usd > 5.0
+then: [ { route_override: { alias: gpt-4o, to: ollama/llama3, ttl: 30m } } ]
+with: { dry_run: false }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(dir, "fixture.jsonl")
+	if err := os.WriteFile(fixture, []byte(`{"id":"hit","type":"cost.budget_burn","correlation_key":"acme:cost","subject":{"alias":"gpt-4o"},"data":{"spend_1h_usd":9.0}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := run([]string{"test", "--replay", fixture, "--rules", rulesDir}, &out); code != 0 {
+		t.Fatalf("test --replay exit nonzero: %s", out.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "replay:") || !strings.Contains(got, "would") {
+		t.Fatalf("human default replay output changed: %q", got)
+	}
+	if strings.HasPrefix(strings.TrimSpace(got), "[") {
+		t.Fatalf("human default must not be JSON: %q", got)
 	}
 }
