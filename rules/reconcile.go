@@ -12,20 +12,25 @@ type compiledRule struct {
 	cond *Condition
 }
 
-// Reconciler evaluates compiled rules against a signal.
-type Reconciler struct{ rules []compiledRule }
+// Reconciler evaluates compiled rules against a signal. Rules are indexed by
+// their `on:` signal type so each evaluation iterates only the same-type bucket
+// instead of scanning every compiled rule. Within a bucket, rules retain their
+// original (parse) order, preserving fired-intent ordering-within-type.
+type Reconciler struct{ byType map[string][]compiledRule }
 
-// NewReconciler compiles all rule conditions up front.
+// NewReconciler compiles all rule conditions up front and indexes them by the
+// `on:` signal type. Iteration order within each type bucket matches the input
+// rule order.
 func NewReconciler(rs []Rule) (*Reconciler, error) {
-	out := make([]compiledRule, 0, len(rs))
+	byType := make(map[string][]compiledRule, len(rs))
 	for _, r := range rs {
 		c, err := CompileCondition(r.When)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, compiledRule{rule: r, cond: c})
+		byType[r.On] = append(byType[r.On], compiledRule{rule: r, cond: c})
 	}
-	return &Reconciler{rules: out}, nil
+	return &Reconciler{byType: byType}, nil
 }
 
 // Match is a fired rule together with the intents it produced. The Rule is
@@ -39,10 +44,7 @@ type Match struct {
 // Pure decision function; the engine handles `for:` windowing, idempotency, governance.
 func (rc *Reconciler) EvaluateMatches(sig core.Signal, state map[string]any) []Match {
 	var matches []Match
-	for _, cr := range rc.rules {
-		if cr.rule.On != sig.Type {
-			continue
-		}
+	for _, cr := range rc.byType[sig.Type] {
 		ok, err := cr.cond.Eval(sig, state)
 		if err != nil || !ok {
 			continue
@@ -70,8 +72,8 @@ func (rc *Reconciler) Reconcile(sig core.Signal, state map[string]any) []core.Re
 // their outstanding intents.
 func (rc *Reconciler) Cleared(sig core.Signal, state map[string]any) []Rule {
 	var out []Rule
-	for _, cr := range rc.rules {
-		if cr.rule.On != sig.Type || cr.rule.With.Rollback != "on_clear" {
+	for _, cr := range rc.byType[sig.Type] {
+		if cr.rule.With.Rollback != "on_clear" {
 			continue
 		}
 		if ok, err := cr.cond.Eval(sig, state); err == nil && !ok {
@@ -89,8 +91,8 @@ func (rc *Reconciler) Cleared(sig core.Signal, state map[string]any) []Rule {
 // unaffected by a state-store blip and is excluded.
 func (rc *Reconciler) StateDependentRules(sigType string) []Rule {
 	var out []Rule
-	for _, cr := range rc.rules {
-		if cr.rule.On == sigType && referencesState(cr.rule.When) {
+	for _, cr := range rc.byType[sigType] {
+		if referencesState(cr.rule.When) {
 			out = append(out, cr.rule)
 		}
 	}
