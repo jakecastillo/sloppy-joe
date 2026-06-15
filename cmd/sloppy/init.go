@@ -69,6 +69,34 @@ const scaffoldRulesSample = `# Sloppy Joe hand-written rule (sample). Copy to a 
 #   - page: { slack: "#ai-ops" }             # action(s) to take when it fires
 `
 
+// scaffoldPricebookSample is a starter price book dropped beside the config as a
+// .yaml.sample. The cost-guard recipe (enabled in the scaffold) only fires once
+// spend is non-zero, and spend stays $0 until the ledger has prices — so a fresh
+// install with no price book makes cost-guard look broken. Copy this to a *.yaml
+// file and wire it with `sloppyd --pricebook <file>` (or `engine.pricebook`). The
+// prices are ILLUSTRATIVE ONLY and will drift; replace with your provider's rates.
+const scaffoldPricebookSample = `# Sloppy Joe price book (sample) — ILLUSTRATIVE ONLY, NOT AUTHORITATIVE.
+# Copy to a *.yaml file and wire it with: sloppyd --pricebook <file>
+# (or set engine.pricebook in sloppy.yaml). Maps a model to its per-1k-token price
+# in USD; the cost ledger uses it to turn OTLP token metrics into estimated spend,
+# which the cost-guard recipe guards against. A model absent here is priced at $0.
+# These numbers are rough and WILL drift — replace with your provider's current rates.
+#
+# Schema: <model-name>: { input_per_1k: <usd>, output_per_1k: <usd> }
+gpt-4o:
+  input_per_1k: 0.0025
+  output_per_1k: 0.01
+gpt-4o-mini:
+  input_per_1k: 0.00015
+  output_per_1k: 0.0006
+claude-3-5-sonnet:
+  input_per_1k: 0.003
+  output_per_1k: 0.015
+ollama/llama3:
+  input_per_1k: 0.0
+  output_per_1k: 0.0
+`
+
 // cmdInit scaffolds a starter config, a redacted .env.sample, and a signing key.
 // It is non-interactive (safe in CI), refuses to clobber an existing config without
 // --force, and a no-op re-run exits 0 ("already initialized").
@@ -100,6 +128,19 @@ func cmdInit(args []string, out io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(out, "✓ wrote %s\n", envPath)
+
+	// A starter price book beside the config so the cost-guard recipe has non-zero
+	// spend to guard against (an empty book signals $0 and cost-guard never fires).
+	// Written .yaml.sample (the ledger never auto-loads it) and never clobbered, so a
+	// re-run or --force leaves an operator's edited copy untouched.
+	pbPath := filepath.Join(dir, "pricebook.yaml.sample")
+	if _, err := os.Stat(pbPath); err != nil {
+		if err := os.WriteFile(pbPath, []byte(scaffoldPricebookSample), 0o644); err != nil {
+			fmt.Fprintf(out, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(out, "✓ wrote %s\n", pbPath)
+	}
 
 	keyPath := filepath.Join(dir, "sloppy.key")
 	if _, err := intent.LoadOrCreateSigner(keyPath); err != nil {

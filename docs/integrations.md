@@ -199,3 +199,43 @@ Then confirm the spend landed in the ledger via the status surface:
 ```bash
 curl localhost:8723/status
 ```
+
+---
+
+## Price book (turn OTLP token metrics into spend — `--pricebook`)
+
+The OTLP source above records **token counts**, but cost is absent from the OTel GenAI
+semconv, so Sloppy Joe prices it itself from a static price book. **Without a price book
+every model is priced at $0** — the cost ledger stays empty, `state.spend_1h_usd` reads
+`0`, and the shipped **cost-guard** recipe never fires (the demo looks broken). Point the
+daemon at a price book to close the loop from token metrics to dollars.
+
+`sloppy init` drops a starter `pricebook.yaml.sample` beside your config (and a fuller
+[`examples/pricebook.yaml`](../examples/pricebook.yaml) ships in the repo). The prices in
+both are **illustrative only and will drift** — copy one to a `*.yaml` file and replace
+the numbers with your provider's current rates:
+
+```yaml
+# pricebook.yaml — model -> per-1k-token price in USD (a model absent here is priced $0)
+gpt-4o:
+  input_per_1k: 0.0025
+  output_per_1k: 0.01
+claude-3-5-sonnet:
+  input_per_1k: 0.003
+  output_per_1k: 0.015
+```
+
+**Wire it** — pass it on the daemon (flag wins over `env`/file), or set `engine.pricebook`
+in `sloppy.yaml`:
+
+```bash
+sloppyd --pricebook pricebook.yaml
+```
+
+**Prove it** — POST the same OTLP token payload as above, then read `/status`: with the
+price book loaded the recorded tokens now carry a non-zero dollar cost, so `spend_1h_usd`
+climbs and cost-guard has something to guard:
+
+```bash
+curl localhost:8723/status
+```
