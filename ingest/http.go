@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/sloppyjoe/sloppy/core"
@@ -46,6 +47,13 @@ type Server struct {
 	engine  *engine.Engine
 	ledger  *ledger.CostLedger // optional; nil disables /v1/usage
 	metrics *metrics.Registry  // optional; powers /status
+
+	// statusMu guards statusBuf, the single long-lived buffer the /status
+	// handler reuses across polls via metrics.SnapshotInto so the routinely
+	// polled path is allocation-free in steady state. Concurrent /status
+	// requests serialize on this mutex while filling and encoding the buffer.
+	statusMu  sync.Mutex
+	statusBuf map[string]int64
 }
 
 // Option configures a Server. Mirrors engine.New's functional-options style so
@@ -105,12 +113,16 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	snap := map[string]int64{}
-	if s.metrics != nil {
-		snap = s.metrics.Snapshot()
-	}
+	// Reuse one long-lived buffer across polls so the routinely-polled /status
+	// path is allocation-free in steady state. SnapshotInto clears and refills
+	// the buffer under the registry mutex; statusMu serializes concurrent
+	// /status requests sharing the single buffer. A nil registry yields an empty
+	// (cleared) buffer, matching the previous empty-map response.
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.statusBuf = s.metrics.SnapshotInto(s.statusBuf)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(snap)
+	_ = json.NewEncoder(w).Encode(s.statusBuf)
 }
 
 type signalResp struct {
