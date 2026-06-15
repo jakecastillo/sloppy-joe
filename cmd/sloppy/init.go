@@ -55,6 +55,20 @@ const scaffoldEnv = `# Sloppy Joe secrets. Fill in and load via your secret mana
 # SLOPPY_API_KEYS=key1=ingest:write,status:read
 `
 
+// scaffoldRulesSample is a commented starter dropped in ./rules/. It is written as
+// a .yaml.sample (NOT .yaml/.yml) so the rule loader skips it: the scaffold relies
+// on the cost-guard recipe out of the box, and an empty rules dir is fine. Rename a
+// copy to *.yaml and uncomment to author your first hand-written rule.
+const scaffoldRulesSample = `# Sloppy Joe hand-written rule (sample). Copy to a *.yaml file in this directory
+# and uncomment to activate. One YAML document = one rule. Check with:
+#   sloppy rules validate ./rules
+#
+# on: cost.budget_burn                       # signal type to match
+# when: signal.data.spend_1h_usd > 5.0       # CEL-style predicate
+# then:
+#   - page: { slack: "#ai-ops" }             # action(s) to take when it fires
+`
+
 // cmdInit scaffolds a starter config, a redacted .env.sample, and a signing key.
 // It is non-interactive (safe in CI), refuses to clobber an existing config without
 // --force, and a no-op re-run exits 0 ("already initialized").
@@ -94,6 +108,23 @@ func cmdInit(args []string, out io.Writer) int {
 	}
 	fmt.Fprintf(out, "✓ created signing key %s\n", keyPath)
 
-	fmt.Fprintln(out, "next: edit sloppy.yaml, then run `sloppy config validate` and `sloppyd`")
+	// Create ./rules/ so the scaffold's `rules: [./rules]` resolves and the very
+	// first `sloppy doctor` does not fail on a missing path. The directory starts
+	// empty (recipes cover the live loop); a commented *.yaml.sample shows how to
+	// author your first rule (the loader ignores non-.yaml/.yml files).
+	rulesDir := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o750); err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(out, "✓ created rules dir %s\n", rulesDir)
+	samplePath := filepath.Join(rulesDir, "example.yaml.sample")
+	if err := os.WriteFile(samplePath, []byte(scaffoldRulesSample), 0o644); err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(out, "✓ wrote %s\n", samplePath)
+
+	fmt.Fprintln(out, "next: run `sloppy config validate`, then `sloppy doctor`, then start the daemon with `sloppyd`")
 	return 0
 }

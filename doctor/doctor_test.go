@@ -51,18 +51,50 @@ func TestCheckRulesMissingDirFriendlyMessage(t *testing.T) {
 	}
 }
 
+// A rules directory that exists but holds no rule files (what `sloppy init`
+// scaffolds) must pass doctor as informational, not fail like a missing path.
+func TestCheckRulesEmptyDirIsOK(t *testing.T) {
+	empty := filepath.Join(t.TempDir(), "rules")
+	if err := os.MkdirAll(empty, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := CheckRules(empty)
+	if !c.OK {
+		t.Fatalf("empty rules dir should be OK (informational): %+v", c)
+	}
+	if !strings.Contains(c.Detail, empty) {
+		t.Errorf("detail should name the dir %q: %q", empty, c.Detail)
+	}
+	// Must not regress the missing-path remedy onto the empty-dir case.
+	if strings.Contains(c.Detail, "not found") {
+		t.Errorf("empty dir should not use the not-found message: %q", c.Detail)
+	}
+}
+
 func TestCheckLiteLLM(t *testing.T) {
-	if c := CheckLiteLLM(""); !c.OK {
+	if c := CheckLiteLLM(true, ""); !c.OK {
 		t.Fatal("empty url should skip-ok")
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	if c := CheckLiteLLM(srv.URL); !c.OK {
+	if c := CheckLiteLLM(true, srv.URL); !c.OK {
 		t.Fatalf("reachable server should pass: %+v", c)
 	}
-	if c := CheckLiteLLM("http://127.0.0.1:1"); c.OK {
+	if c := CheckLiteLLM(true, "http://127.0.0.1:1"); c.OK {
 		t.Fatal("unreachable server should fail")
+	}
+}
+
+// A disabled LiteLLM must not fail doctor even if its URL is set but unreachable:
+// the fresh `sloppy init` scaffold ships litellm.enabled=false with a localhost URL.
+func TestCheckLiteLLMDisabledIsInformational(t *testing.T) {
+	c := CheckLiteLLM(false, "http://127.0.0.1:1")
+	if !c.OK {
+		t.Fatalf("disabled litellm must be OK even with an unreachable url: %+v", c)
+	}
+	if !strings.Contains(c.Detail, "disabled") {
+		t.Errorf("detail should note litellm is disabled: %q", c.Detail)
 	}
 }
