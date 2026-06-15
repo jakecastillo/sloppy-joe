@@ -1,0 +1,15 @@
+# recipe: cost-runaway v1
+on: {{ .Params.On }}
+when: signal.data.spend_1h_usd > {{ .Params.ThresholdUSD1h }}
+{{- if .Params.For }}
+for: {{ .Params.For }}
+{{- end }}
+then:
+  - throttle_tenant: { ttl: {{ .Params.TTL }} }
+{{- if and .Params.Notify.OpenIssue .Github.Enabled }}
+  - open_issue: { repo: {{ .Github.Repo }} }
+{{- end }}
+{{- if and .Params.Notify.Page .Slack.Enabled }}
+  - page: { slack: "{{ .Slack.Channel }}" }
+{{- end }}
+with: { dry_run: false, rollback: on_clear }
