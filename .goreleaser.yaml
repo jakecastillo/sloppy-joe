@@ -29,6 +29,88 @@ archives:
       - goos: windows
         formats: [zip]
 
+# Linux packages (deb, rpm, apk) built from the already-compiled binaries.
+# These attach to the existing GitHub Release as extra artifacts and need NO
+# workflow change: `goreleaser release` picks them up automatically.
+nfpms:
+  - id: sloppy
+    package_name: sloppy
+    ids: [sloppy, sloppyd]
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: Sloppy Joe
+    homepage: https://github.com/jakecastillo/sloppy-joe
+    maintainer: Sloppy Joe Maintainers <bot@users.noreply.github.com>
+    description: |-
+      Serving governed AI ops.
+      Sloppy Joe is a model-agnostic control loop that turns model-layer
+      signals into governed, audited, Git-reviewed automated responses.
+    license: Apache-2.0
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+    section: utils
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/sloppy/LICENSE
+        file_info:
+          mode: 0o644
+      - src: README.md
+        dst: /usr/share/doc/sloppy/README.md
+        file_info:
+          mode: 0o644
+
+# macOS distribution via a Homebrew cask in a cross-repo tap.
+#
+# TODO (human-gated, GUARDED): the tap push below requires a Personal Access
+# Token (repo scope on the external tap) that is NOT available to the default
+# GITHUB_TOKEN. Before this can run in CI a human must:
+#   1. Create the external tap repo github.com/jakecastillo/homebrew-tap.
+#   2. Add a PAT as a repo secret (e.g. secrets.HOMEBREW_TAP_TOKEN).
+#   3. Wire that secret into a GUARDED step in .github/workflows/release.yml
+#      (e.g. only on real tags, with `if:` protecting it) and export it as
+#      HOMEBREW_TAP_TOKEN so the `token:` template below resolves.
+# Until then goreleaser builds the cask file locally but skips the push.
+homebrew_casks:
+  - name: sloppy
+    ids: [sloppy]
+    binaries: [sloppy, sloppyd]
+    repository:
+      owner: jakecastillo
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: Sloppy Joe Bot
+      email: bot@users.noreply.github.com
+    homepage: https://github.com/jakecastillo/sloppy-joe
+    description: Serving governed AI ops — a governed, audited control loop for AI.
+    license: Apache-2.0
+    directory: Casks
+
+# Windows distribution via a Scoop manifest in a cross-repo bucket.
+#
+# TODO (human-gated, GUARDED): same constraint as the Homebrew tap above — the
+# bucket push needs a PAT (repo scope on the external bucket), NOT the default
+# GITHUB_TOKEN. Before this can run in CI a human must:
+#   1. Create the external bucket repo github.com/jakecastillo/scoop-bucket.
+#   2. Add a PAT as a repo secret (e.g. secrets.SCOOP_BUCKET_TOKEN).
+#   3. Wire that secret into a GUARDED step in .github/workflows/release.yml
+#      and export it as SCOOP_BUCKET_TOKEN so the `token:` template resolves.
+# Until then goreleaser builds the manifest locally but skips the push.
+scoops:
+  - name: sloppy
+    ids: [sloppy, sloppyd]
+    repository:
+      owner: jakecastillo
+      name: scoop-bucket
+      branch: main
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    commit_author:
+      name: Sloppy Joe Bot
+      email: bot@users.noreply.github.com
+    homepage: https://github.com/jakecastillo/sloppy-joe
+    description: Serving governed AI ops — a governed, audited control loop for AI.
+    license: Apache-2.0
+
 checksum:
   name_template: "checksums.txt"
 
