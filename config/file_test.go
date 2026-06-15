@@ -13,7 +13,7 @@ func TestLoadFileMissingReturnsDefaults(t *testing.T) {
 	if existed {
 		t.Fatal("missing file should report existed=false")
 	}
-	if f.Version != 1 || f.Store.Kind != "sqlite" || f.Server.Addr != ":8723" {
+	if f.Version != 1 || f.Store.Kind != "sqlite" || f.Server.Addr != "127.0.0.1:8723" {
 		t.Fatalf("defaults not applied: %+v", f)
 	}
 	if len(f.Rules) != 1 || f.Rules[0] != "rules" {
@@ -40,7 +40,7 @@ func TestLoadFileParsesAndFillsDefaults(t *testing.T) {
 	if f.Store.Kind != "redis" || f.Store.RedisAddr != "localhost:6379" {
 		t.Fatalf("store not parsed: %+v", f.Store)
 	}
-	if f.Server.Addr != ":8723" { // default filled even though file omitted it
+	if f.Server.Addr != "127.0.0.1:8723" { // default filled even though file omitted it
 		t.Fatalf("default addr not filled: %q", f.Server.Addr)
 	}
 	if sp := f.Platforms["slack"]; !sp.Enabled || sp.TokenEnv != "SLOPPY_TOKEN_SLACK" {

@@ -26,8 +26,9 @@ $ sloppy audit tail
   chain: verified ✓ (3 entries)
 
 # run continuously: HTTP ingest + TTL auto-revert + /status metrics
+# (binds loopback by default so it starts with no extra flags)
 $ sloppyd --rules examples/rules
-  🥪 sloppyd listening on :8723
+  🥪 sloppyd listening on 127.0.0.1:8723
 ```
 
 > The command is **`sloppy`** (`sloppy init`, `sloppy audit tail`). We avoided `joe` because it collides with the classic `joe` editor (Joe's Own Editor) on many Unix systems — the brand stays **Sloppy Joe**.
@@ -133,7 +134,10 @@ sequenceDiagram
 go build -o bin/sloppy  ./cmd/sloppy
 go build -o bin/sloppyd ./cmd/sloppyd
 
-# fire a recorded signal through the example rules, then read the audit
+# 1. scaffold a config + starter rules in the current directory
+./bin/sloppy init
+
+# 2. fire a recorded signal through the example rules, then read the audit
 ./bin/sloppy inject --now --rules examples/rules --db /tmp/sloppy.db examples/signals/cost-spike.json
 ./bin/sloppy audit tail --db /tmp/sloppy.db
 
@@ -142,14 +146,16 @@ go build -o bin/sloppyd ./cmd/sloppyd
 ./bin/sloppy audit --verify-sigs --db /tmp/sloppy.db --key sloppy.key
 
 # or run the daemon and POST signals / usage over HTTP
+# (binds 127.0.0.1:8723 by default — works out of the box, no --auth needed)
 ./bin/sloppyd --rules examples/rules --db /tmp/sloppy.db &
-curl -XPOST localhost:8723/v1/signals -d @examples/signals/cost-spike.json
-curl localhost:8723/status
+curl -XPOST 127.0.0.1:8723/v1/signals -d @examples/signals/cost-spike.json
+curl 127.0.0.1:8723/status
 ```
 
 **Commands:** `sloppy inject` · `sloppy rules validate` · `sloppy test --replay` · `sloppy audit tail` · `sloppy audit --verify-sigs` · `sloppy doctor` · `sloppyd` (daemon).
 - **Verifiable signatures:** intents are ed25519-signed; the applied-audit entry persists the signed canonical bytes + full signature. `sloppy audit --verify-sigs` recomputes each intent's canonical bytes and verifies the signature against the persisted public key (`sloppy.key.pub`), exiting non-zero on any failure. The private key (`sloppy.key`, mode `0600`) is required to forge a verifiable intent; a holder of only the public key can verify authenticity and detect tampering but cannot sign. See [`SECURITY.md`](SECURITY.md) for the threat model.
 - **State backend:** `sloppyd --store sqlite` (default) or `--store redis --redis-addr host:6379`.
+- **Bind address:** `sloppyd` binds `127.0.0.1:8723` (loopback) by default, so it starts with no extra flags. To expose it on all interfaces, run `sloppyd --addr :8723 --auth` — the bind guard refuses an unauthenticated network-reachable bind, so `--auth` (with `SLOPPY_API_KEYS`) is required.
 - **Auth:** `sloppyd --auth` with `SLOPPY_API_KEYS="key1=ingest:write,status:read"`.
 - **Gateway:** to wire a real LiteLLM admin API, set `SLOPPY_LITELLM_URL` and `SLOPPY_TOKEN_LITELLM`. Copy-paste wiring for every gateway/sink/source (LiteLLM · GitHub · Slack · OTLP) → [`docs/integrations.md`](docs/integrations.md).
 - **`for:` windows:** one-shot `sloppy inject --now` fires immediately; the `sloppyd` daemon evaluates `for:` windows across the live signal stream.
