@@ -55,10 +55,29 @@ const scaffoldEnv = `# Sloppy Joe secrets. Fill in and load via your secret mana
 # SLOPPY_API_KEYS=key1=ingest:write,status:read
 `
 
-// scaffoldRulesSample is a commented starter dropped in ./rules/. It is written as
-// a .yaml.sample (NOT .yaml/.yml) so the rule loader skips it: the scaffold relies
-// on the cost-guard recipe out of the box, and an empty rules dir is fine. Rename a
-// copy to *.yaml and uncomment to author your first hand-written rule.
+// scaffoldStarterRule is an ACTIVE starter rule written as starter.yaml (a real
+// *.yaml the loader picks up), so a fresh install fires on minute one instead of
+// dead-ending with "no rule fired". It matches the same cost.budget_burn signal the
+// shipped examples/signals/cost-spike.json carries, with a single `page` action that
+// always resolves to the built-in Log actuator (no platform credentials required) —
+// so `sloppy inject examples/signals/cost-spike.json` fires immediately out of the
+// box. Edit or delete it once you author your own rules.
+const scaffoldStarterRule = `# Sloppy Joe STARTER rule (active). This fires on minute one so a fresh install is
+# not a dead-end: inject a cost.budget_burn signal (e.g. the shipped
+# examples/signals/cost-spike.json) and watch it act + write a verifiable audit
+# chain. The 'page' action logs via the built-in Log actuator — no credentials
+# needed. Edit the predicate/actions for your environment, or delete this file once
+# you have your own rules. Validate with: sloppy rules validate ./rules
+on: cost.budget_burn                       # signal type to match
+when: signal.data.spend_1h_usd > 5.0       # CEL-style predicate
+then:
+  - page: {slack: "#ai-ops"}               # action taken when the rule fires
+with: {dry_run: false}
+`
+
+// scaffoldRulesSample is a commented authoring template dropped beside the active
+// starter as a .yaml.sample (NOT .yaml/.yml) so the rule loader skips it. It shows
+// the rule shape for writing your own. Copy to a *.yaml file and uncomment.
 const scaffoldRulesSample = `# Sloppy Joe hand-written rule (sample). Copy to a *.yaml file in this directory
 # and uncomment to activate. One YAML document = one rule. Check with:
 #   sloppy rules validate ./rules
@@ -150,15 +169,26 @@ func cmdInit(args []string, out io.Writer) int {
 	fmt.Fprintf(out, "✓ created signing key %s\n", keyPath)
 
 	// Create ./rules/ so the scaffold's `rules: [./rules]` resolves and the very
-	// first `sloppy doctor` does not fail on a missing path. The directory starts
-	// empty (recipes cover the live loop); a commented *.yaml.sample shows how to
-	// author your first rule (the loader ignores non-.yaml/.yml files).
+	// first `sloppy doctor` does not fail on a missing path. Drop an ACTIVE
+	// starter.yaml so the install is NOT a no-rule-fired dead-end on minute one (a
+	// cost.budget_burn signal fires it immediately), plus a commented *.yaml.sample
+	// authoring template the loader ignores (non-.yaml/.yml files are skipped).
 	rulesDir := filepath.Join(dir, "rules")
 	if err := os.MkdirAll(rulesDir, 0o750); err != nil {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
 	}
 	fmt.Fprintf(out, "✓ created rules dir %s\n", rulesDir)
+	// The active starter is never clobbered, so a re-run or --force leaves an
+	// operator's edited copy untouched (same contract as the price book sample).
+	starterPath := filepath.Join(rulesDir, "starter.yaml")
+	if _, err := os.Stat(starterPath); err != nil {
+		if err := os.WriteFile(starterPath, []byte(scaffoldStarterRule), 0o644); err != nil {
+			fmt.Fprintf(out, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(out, "✓ wrote %s\n", starterPath)
+	}
 	samplePath := filepath.Join(rulesDir, "example.yaml.sample")
 	if err := os.WriteFile(samplePath, []byte(scaffoldRulesSample), 0o644); err != nil {
 		fmt.Fprintf(out, "error: %v\n", err)
@@ -166,6 +196,7 @@ func cmdInit(args []string, out io.Writer) int {
 	}
 	fmt.Fprintf(out, "✓ wrote %s\n", samplePath)
 
-	fmt.Fprintln(out, "next: run `sloppy config validate`, then `sloppy doctor`, then start the daemon with `sloppyd`")
+	fmt.Fprintln(out, "next: `sloppy config validate`, then fire the starter rule with "+
+		"`sloppy inject --now examples/signals/cost-spike.json` (watch it act + audit), then run `sloppyd`")
 	return 0
 }
