@@ -2,6 +2,8 @@ package ingest
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -69,6 +71,71 @@ func TestParseOTLPUsageMultiDatapoint(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("event %d: got %+v want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// otlpBatchWithDataPoints builds an OTLP/JSON metrics body whose single
+// token-named sum metric carries n input datapoints. Used to drive the
+// per-batch event cap without hand-writing huge JSON literals.
+func otlpBatchWithDataPoints(n int) []byte {
+	var b strings.Builder
+	b.WriteString(`{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"gen_ai.client.token.usage","sum":{"dataPoints":[`)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"asInt":"1","attributes":[`+
+			`{"key":"gen_ai.token.type","value":{"stringValue":"input"}},`+
+			`{"key":"tenant","value":{"stringValue":"t"}},`+
+			`{"key":"gen_ai.request.model","value":{"stringValue":"m"}}]}`)
+	}
+	b.WriteString(`]}}]}]}]}`)
+	return []byte(b.String())
+}
+
+// TestParseOTLPUsageAtCap pins under-cap behavior: a batch with exactly
+// maxOTLPEvents datapoints is fully extracted, unchanged, with no error.
+func TestParseOTLPUsageAtCap(t *testing.T) {
+	ev, err := parseOTLPUsage(otlpBatchWithDataPoints(maxOTLPEvents))
+	if err != nil {
+		t.Fatalf("at-cap batch must not error: %v", err)
+	}
+	if len(ev) != maxOTLPEvents {
+		t.Fatalf("event count: got %d want %d", len(ev), maxOTLPEvents)
+	}
+	// Each datapoint priced exactly as before (asInt 1, input type).
+	if ev[0].tenant != "t" || ev[0].model != "m" || ev[0].input != 1 || ev[0].output != 0 {
+		t.Fatalf("first event mispriced: %+v", ev[0])
+	}
+}
+
+// TestParseOTLPUsageOverCap pins over-cap behavior: one datapoint past the cap
+// trips the bounded error with no panic, no partial slice, and no oversized
+// allocation (the returned slice is nil, not a cap+1-length working set).
+func TestParseOTLPUsageOverCap(t *testing.T) {
+	ev, err := parseOTLPUsage(otlpBatchWithDataPoints(maxOTLPEvents + 1))
+	if !errors.Is(err, errOTLPEventCap) {
+		t.Fatalf("over-cap batch must return errOTLPEventCap, got err=%v", err)
+	}
+	if ev != nil {
+		t.Fatalf("over-cap batch must not return a partial/oversized slice, got len=%d", len(ev))
+	}
+}
+
+// TestOTLPMetricsEndpointEventCap413 confirms the handler surfaces the event
+// cap as a 413, mirroring the maxOTLPBytes body cap (not a 400 for bad JSON).
+func TestOTLPMetricsEndpointEventCap413(t *testing.T) {
+	s, _ := testServer(t)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	body := otlpBatchWithDataPoints(maxOTLPEvents + 1)
+	resp, err := http.Post(srv.URL+"/v1/otlp/metrics", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("otlp post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-cap batch: got status %d want %d", resp.StatusCode, http.StatusRequestEntityTooLarge)
 	}
 }
 

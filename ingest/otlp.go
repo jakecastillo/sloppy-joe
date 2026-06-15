@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -9,6 +10,20 @@ import (
 	"strings"
 	"time"
 )
+
+// maxOTLPEvents caps the number of usage events a single OTLP batch may yield.
+// The body itself is already capped at maxOTLPBytes (16 MiB), but a crafted
+// payload densely packed with token-named datapoints can still expand into a
+// large in-memory []usageEvent before any are persisted. This bound keeps the
+// off-hot-path working set and allocation predictable; it sits well above any
+// realistic batch (16 MiB of JSON cannot encode anywhere near this many valid
+// datapoints), so honest traffic is unaffected. Mirrors the maxOTLPBytes cap.
+const maxOTLPEvents = 1 << 16 // 65536 events/batch
+
+// errOTLPEventCap is returned by parseOTLPUsage when a single batch would yield
+// more than maxOTLPEvents usage events. It is a client fault (batch too large),
+// handled like the maxOTLPBytes body cap: a 413, not a 400 for malformed JSON.
+var errOTLPEventCap = errors.New("otlp batch exceeds event cap")
 
 // Minimal OTLP/JSON metrics shapes — enough to extract gen_ai token usage.
 type otlpMetricsDoc struct {
@@ -72,9 +87,16 @@ func parseOTLPUsage(body []byte) ([]usageEvent, error) {
 						continue
 					}
 					// Presize events from this set's datapoint count so the
-					// append loop below grows the backing array at most once.
-					events = slices.Grow(events, len(ds.DataPoints))
+					// append loop below grows the backing array at most once —
+					// but never grow past the cap, so a crafted len(DataPoints)
+					// cannot force an oversized allocation before the bound trips.
+					events = slices.Grow(events, min(len(ds.DataPoints), maxOTLPEvents-len(events)))
 					for _, dp := range ds.DataPoints {
+						// Stop before appending the (cap+1)th event and surface a
+						// bounded error — no panic, no partial-then-silent return.
+						if len(events) >= maxOTLPEvents {
+							return nil, errOTLPEventCap
+						}
 						clear(attrs)
 						for _, kv := range dp.Attributes {
 							attrs[kv.Key] = kv.Value.StringValue
@@ -135,6 +157,12 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := parseOTLPUsage(body)
 	if err != nil {
+		// An over-cap batch is a client fault (too large), handled like the
+		// maxOTLPBytes body cap: 413, not the 400 used for malformed JSON.
+		if errors.Is(err, errOTLPEventCap) {
+			http.Error(w, "otlp batch too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "bad otlp json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
