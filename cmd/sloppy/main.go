@@ -57,6 +57,7 @@ func run(args []string, out io.Writer) int {
 		return cmdRecipe(args[1:], out)
 	default:
 		fmt.Fprintf(out, "unknown command: %s\n", args[0])
+		fmt.Fprintln(out, usageLine)
 		return 2
 	}
 }
@@ -242,17 +243,19 @@ func cmdTest(args []string, out io.Writer) int {
 		fmt.Fprintln(out, "usage: sloppy test --replay <fixture.jsonl> [--rules dir]")
 		return 2
 	}
+	// Load the replay fixture BEFORE the rules so a missing/unreadable fixture
+	// reports the fixture path, not a misleading "no rules found" from the rules dir.
+	sigs, err := config.LoadSignalsJSONL(*fixture)
+	if err != nil {
+		fmt.Fprintf(out, "error: %v\n", err)
+		return 1
+	}
 	rs, err := config.LoadRules(*rulesPath)
 	if err != nil {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
 	}
 	rec, err := rules.NewReconciler(rs)
-	if err != nil {
-		fmt.Fprintf(out, "error: %v\n", err)
-		return 1
-	}
-	sigs, err := config.LoadSignalsJSONL(*fixture)
 	if err != nil {
 		fmt.Fprintf(out, "error: %v\n", err)
 		return 1
@@ -402,6 +405,7 @@ func cmdConfig(args []string, out io.Writer) int {
 		return 0
 	default:
 		fmt.Fprintf(out, "unknown config subcommand: %s\n", sub)
+		fmt.Fprintln(out, "usage: sloppy config <show|validate|schema> [--config sloppy.yaml]")
 		return 2
 	}
 }
@@ -434,6 +438,7 @@ func cmdPlatform(args []string, out io.Writer) int {
 		fmt.Fprintln(out, "no platforms configured (Log actuator only)")
 		return 0
 	}
+	fmt.Fprintln(out, "platforms (enabled/disabled, token presence, experimental):")
 	for _, n := range names {
 		p := eff.Platforms[n]
 		status := "disabled"
@@ -481,6 +486,7 @@ func cmdRecipe(args []string, out io.Writer) int {
 	eff := config.Resolve(f, existed, config.FlagOverrides{}, os.Getenv)
 	switch sub {
 	case "list":
+		fmt.Fprintln(out, "recipes (available = curated but not yet added to your config; enabled/disabled = configured):")
 		for _, n := range recipe.Names() {
 			status := "available"
 			if rc, ok := eff.Recipes[n]; ok {
@@ -511,6 +517,7 @@ func cmdRecipe(args []string, out io.Writer) int {
 		return 0
 	default:
 		fmt.Fprintf(out, "unknown recipe subcommand: %s\n", sub)
+		fmt.Fprintln(out, "usage: sloppy recipe <list|show> [name] [--config sloppy.yaml]")
 		return 2
 	}
 }
