@@ -64,6 +64,12 @@ var registry = map[string]recipeDef{
 		build:    costGuardDefaults,
 		validate: costGuardValidate,
 	},
+	"cost-runaway": {
+		template: "cost-runaway.yaml.tmpl",
+		summary:  "Extreme spend over a $/hr threshold -> throttle the tenant (TTL, auto-revert on_clear) (+ optional issue/page).",
+		build:    costRunawayDefaults,
+		validate: costRunawayValidate,
+	},
 	"fallback-storm": {
 		template: "fallback-storm.yaml.tmpl",
 		summary:  "Critical provider-fallback storm -> page on-call (+ optional issue).",
@@ -172,6 +178,37 @@ func costGuardValidate(a any) error {
 	}
 	if p.Failover.Alias == "" || p.Failover.To == "" {
 		return fmt.Errorf("failover.alias and failover.to are required")
+	}
+	return nil
+}
+
+// --- cost-runaway ---
+
+type costRunawayParams struct {
+	On             string  `yaml:"on"`
+	ThresholdUSD1h float64 `yaml:"threshold_usd_1h"`
+	For            string  `yaml:"for"`
+	TTL            string  `yaml:"ttl"`
+	Notify         notify  `yaml:"notify"`
+}
+
+func costRunawayDefaults() any {
+	return &costRunawayParams{
+		On: "cost.budget_burn", ThresholdUSD1h: 50.0, For: "5m", TTL: "30m",
+		Notify: notify{OpenIssue: true, Page: true},
+	}
+}
+
+func costRunawayValidate(a any) error {
+	p := a.(*costRunawayParams)
+	if p.On == "" {
+		return fmt.Errorf("on: required")
+	}
+	if p.ThresholdUSD1h <= 0 {
+		return fmt.Errorf("threshold_usd_1h must be > 0")
+	}
+	if p.TTL == "" {
+		return fmt.Errorf("ttl: required")
 	}
 	return nil
 }
