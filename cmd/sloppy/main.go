@@ -23,7 +23,7 @@ import (
 	"github.com/sloppyjoe/sloppy/state"
 )
 
-const usageLine = "usage: sloppy <init|version|inject|rules|audit|test|doctor|config|platform|recipe>"
+const usageLine = "usage: sloppy <init|version|inject|rules|audit|report|test|doctor|config|platform|recipe>"
 
 func run(args []string, out io.Writer) int {
 	if len(args) == 0 {
@@ -45,6 +45,8 @@ func run(args []string, out io.Writer) int {
 		return cmdRules(args[1:], out)
 	case "audit":
 		return cmdAudit(args[1:], out)
+	case "report":
+		return cmdReport(args[1:], out)
 	case "test":
 		return cmdTest(args[1:], out)
 	case "doctor":
