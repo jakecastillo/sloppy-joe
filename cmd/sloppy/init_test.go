@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/sloppyjoe/sloppy/doctor"
+	"github.com/sloppyjoe/sloppy/ledger"
 )
 
 // init_test calls cmdInit directly (not via run) so it does not depend on the
@@ -85,6 +87,65 @@ func TestInitScaffoldDoctorLiteLLMDisabled(t *testing.T) {
 	// The scaffold disables litellm with a localhost URL; mirror that here.
 	if c := doctor.CheckLiteLLM(false, "http://localhost:4000"); !c.OK {
 		t.Fatalf("disabled litellm must not fail doctor on the fresh scaffold: %+v", c)
+	}
+}
+
+// TestInitWritesPricebookSample asserts init drops a pricebook.yaml.sample beside the
+// config (so the cost-guard recipe has non-zero spend to guard against), that it parses
+// as a valid price book, that a re-run does not clobber an operator's edits, and that it
+// is written with 0o644 perms.
+func TestInitWritesPricebookSample(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "sloppy.yaml")
+	pb := filepath.Join(dir, "pricebook.yaml.sample")
+
+	var out bytes.Buffer
+	if rc := cmdInit([]string{"--config", cfg}, &out); rc != 0 {
+		t.Fatalf("init rc=%d out=%s", rc, out.String())
+	}
+
+	// The sample must exist and parse as a real price book with at least one model.
+	b, err := os.ReadFile(pb)
+	if err != nil {
+		t.Fatalf("init should write %s: %v", pb, err)
+	}
+	book, err := ledger.LoadPriceBook(b)
+	if err != nil {
+		t.Fatalf("pricebook sample must parse as a price book: %v", err)
+	}
+	if len(book) == 0 {
+		t.Fatalf("pricebook sample should list at least one model")
+	}
+
+	// 0o644 perms. Windows does not honor the group/other bits, so assert the full
+	// mode only off Windows and just the owner-readable/writable bits on Windows.
+	info, err := os.Stat(pb)
+	if err != nil {
+		t.Fatalf("stat %s: %v", pb, err)
+	}
+	if runtime.GOOS == "windows" {
+		if info.Mode().Perm()&0o600 != 0o600 {
+			t.Fatalf("pricebook sample should be owner read+write, got %v", info.Mode().Perm())
+		}
+	} else if info.Mode().Perm() != 0o644 {
+		t.Fatalf("pricebook sample should be 0o644, got %v", info.Mode().Perm())
+	}
+
+	// Operator edits a copy; a re-run (and --force) must not clobber it.
+	const edited = "my-model:\n  input_per_1k: 1.0\n  output_per_1k: 2.0\n"
+	if err := os.WriteFile(pb, []byte(edited), 0o644); err != nil {
+		t.Fatalf("rewrite sample: %v", err)
+	}
+	out.Reset()
+	if rc := cmdInit([]string{"--config", cfg, "--force"}, &out); rc != 0 {
+		t.Fatalf("init --force rc=%d out=%s", rc, out.String())
+	}
+	got, err := os.ReadFile(pb)
+	if err != nil {
+		t.Fatalf("read sample after re-run: %v", err)
+	}
+	if string(got) != edited {
+		t.Fatalf("pricebook sample was clobbered on re-run:\n%s", string(got))
 	}
 }
 

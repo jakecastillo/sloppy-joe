@@ -1,0 +1,30 @@
+# Sloppy Joe price book — ILLUSTRATIVE ONLY, NOT AUTHORITATIVE.
+#
+# Maps a model name to its per-1k-token price in USD. The cost ledger uses this to
+# turn OTLP token-usage metrics into estimated spend, which the cost-guard recipe
+# guards against. Prices below are rough, rounded, and WILL drift — they exist so a
+# fresh install has *some* signal instead of $0 (which makes cost-guard look broken).
+# Replace with your provider's current rates before relying on the numbers.
+#
+# Wire it in with:  sloppyd --pricebook pricebook.yaml   (or engine.pricebook in sloppy.yaml)
+# A model absent from this book is priced at $0 (it simply won't contribute to spend).
+#
+# Schema: <model-name>: { input_per_1k: <usd>, output_per_1k: <usd> }
+gpt-4o:
+  input_per_1k: 0.0025
+  output_per_1k: 0.01
+gpt-4o-mini:
+  input_per_1k: 0.00015
+  output_per_1k: 0.0006
+claude-3-5-sonnet:
+  input_per_1k: 0.003
+  output_per_1k: 0.015
+claude-3-5-haiku:
+  input_per_1k: 0.0008
+  output_per_1k: 0.004
+gemini-1.5-pro:
+  input_per_1k: 0.00125
+  output_per_1k: 0.005
+ollama/llama3:
+  input_per_1k: 0.0
+  output_per_1k: 0.0
