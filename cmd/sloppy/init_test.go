@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sloppyjoe/sloppy/doctor"
 )
 
 // init_test calls cmdInit directly (not via run) so it does not depend on the
@@ -44,6 +46,45 @@ func TestInitScaffoldNoClobberAndValidates(t *testing.T) {
 	out.Reset()
 	if rc := cmdInit([]string{"--config", cfg, "--force"}, &out); rc != 0 {
 		t.Fatalf("init --force rc=%d out=%s", rc, out.String())
+	}
+}
+
+// TestInitCreatesRulesDir asserts the scaffold's `rules: [./rules]` resolves: init
+// creates the directory plus a commented sample, and doctor's rules check passes on
+// it (an empty rules dir is informational, not a failure).
+func TestInitCreatesRulesDir(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "sloppy.yaml")
+
+	var out bytes.Buffer
+	if rc := cmdInit([]string{"--config", cfg}, &out); rc != 0 {
+		t.Fatalf("init rc=%d out=%s", rc, out.String())
+	}
+
+	rulesDir := filepath.Join(dir, "rules")
+	info, err := os.Stat(rulesDir)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("init should create %s as a directory: err=%v", rulesDir, err)
+	}
+	// The starter sample must NOT be a loadable rule file (so the dir stays "empty"
+	// from the loader's view and doctor doesn't trip on an unparseable sample).
+	if _, err := os.Stat(filepath.Join(rulesDir, "example.yaml.sample")); err != nil {
+		t.Fatalf("init should drop a commented sample: %v", err)
+	}
+
+	// Doctor's rules check on the fresh scaffold dir must pass.
+	if c := doctor.CheckRules(rulesDir); !c.OK {
+		t.Fatalf("doctor rules check should pass on fresh scaffold: %+v", c)
+	}
+}
+
+// TestInitScaffoldDoctorLiteLLMDisabled guards the other half of the bead: the
+// scaffold ships litellm disabled, so doctor's litellm probe must be informational
+// (OK) even though the scaffold URL points at a port nothing is listening on.
+func TestInitScaffoldDoctorLiteLLMDisabled(t *testing.T) {
+	// The scaffold disables litellm with a localhost URL; mirror that here.
+	if c := doctor.CheckLiteLLM(false, "http://localhost:4000"); !c.OK {
+		t.Fatalf("disabled litellm must not fail doctor on the fresh scaffold: %+v", c)
 	}
 }
 

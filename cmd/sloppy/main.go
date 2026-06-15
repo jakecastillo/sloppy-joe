@@ -287,16 +287,16 @@ func cmdDoctor(args []string, out io.Writer) int {
 	}
 	f, existed, _ := config.LoadFile(*cfgPath)
 	eff := config.Resolve(f, existed, config.FlagOverrides{}, os.Getenv)
-	litellmURL := ""
+	litellmEnabled, litellmURL := false, ""
 	if p, ok := eff.Platforms["litellm"]; ok {
-		litellmURL = p.URL
+		litellmEnabled, litellmURL = p.Enabled, p.URL
 	}
 	checks := []doctor.Check{
 		doctor.CheckRules(*rulesPath),
 		doctor.CheckDB(*dbPath),
 		doctor.CheckLedger(*dbPath),
 		doctor.CheckPlatforms(eff),
-		doctor.CheckLiteLLM(litellmURL),
+		doctor.CheckLiteLLM(litellmEnabled, litellmURL),
 	}
 	if reg, err := bootstrap.BuildRegistry(eff, out); err == nil {
 		checks = append(checks, doctor.CheckActuators(reg.Kinds()))

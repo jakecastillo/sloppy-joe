@@ -35,6 +35,13 @@ func CheckRules(path string) Check {
 				"rules path %s not found; create it and add *.yaml rule files, "+
 					"or point at an existing one with --rules <dir|file>", path)}
 		}
+		// An existing-but-empty rules directory (e.g. the one `sloppy init`
+		// scaffolds before you write any rules) is fine: recipes may already
+		// cover you, so treat it as informational rather than a hard fail.
+		if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+			return Check{"rules", true, fmt.Sprintf(
+				"%s exists but has no rule files yet (add *.yaml rules, or rely on recipes)", path)}
+		}
 		return Check{"rules", false, err.Error()}
 	}
 	return Check{"rules", true, fmt.Sprintf("%d rule(s) loaded", len(rs))}
@@ -100,8 +107,16 @@ func CheckPlatforms(eff config.Effective) Check {
 	return Check{"platforms", true, fmt.Sprintf("enabled: %s (tokens present)", strings.Join(enabled, ", "))}
 }
 
-// CheckLiteLLM probes a LiteLLM admin endpoint if configured.
-func CheckLiteLLM(url string) Check {
+// CheckLiteLLM probes a LiteLLM admin endpoint when LiteLLM is enabled.
+//
+// When LiteLLM is disabled in the effective config the probe is informational:
+// a fresh scaffold ships litellm.enabled=false, and an unreachable endpoint on a
+// platform the operator has not turned on must not fail `sloppy doctor`. Pass the
+// effective enabled flag so a disabled platform reports OK-but-skipped.
+func CheckLiteLLM(enabled bool, url string) Check {
+	if !enabled {
+		return Check{"litellm", true, "disabled (probe skipped)"}
+	}
 	if url == "" {
 		return Check{"litellm", true, "not configured (skipped)"}
 	}
