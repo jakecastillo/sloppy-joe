@@ -55,6 +55,10 @@ func BuildRegistry(eff config.Effective, out io.Writer) (*actuator.Registry, err
 			reg.Register(actuator.NewBifrost(p.URL, tok("bifrost")))
 		case "envoy":
 			reg.Register(actuator.NewEnvoy(p.URL, tok("envoy")))
+		case "webhook":
+			reg.Register(actuator.NewWebhook(p.URL, tok("webhook")))
+		case "cloudflare":
+			reg.Register(actuator.NewCloudflare(p.URL, tok("cloudflare")))
 		case "github":
 			reg.Register(actuator.NewGitHub(githubBase(p), tok("github")))
 		case "slack":
