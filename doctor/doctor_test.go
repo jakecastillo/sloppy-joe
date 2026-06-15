@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -26,6 +27,27 @@ then: [ { page: { slack: "#x" } } ]
 	}
 	if c := CheckDB(filepath.Join(dir, "d.db")); !c.OK {
 		t.Fatalf("db check should pass: %+v", c)
+	}
+}
+
+func TestCheckRulesMissingDirFriendlyMessage(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "rules")
+
+	c := CheckRules(missing)
+	if c.OK {
+		t.Fatal("missing rules dir should fail the check")
+	}
+	if !strings.Contains(c.Detail, missing) {
+		t.Errorf("detail should name the missing path %q: %q", missing, c.Detail)
+	}
+	if !strings.Contains(c.Detail, "--rules") {
+		t.Errorf("detail should mention the --rules remedy: %q", c.Detail)
+	}
+	// No raw OS syscall text should leak through.
+	for _, raw := range []string{"GetFileAttributesEx", "system cannot find", "no such file or directory"} {
+		if strings.Contains(c.Detail, raw) {
+			t.Errorf("detail should not contain raw syscall text %q: %q", raw, c.Detail)
+		}
 	}
 }
 
