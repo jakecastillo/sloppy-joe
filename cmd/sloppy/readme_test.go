@@ -18,6 +18,7 @@ func TestReadmeCommandsAllResolve(t *testing.T) {
 	known := map[string]bool{
 		"init": true, "version": true, "inject": true, "rules": true, "audit": true,
 		"test": true, "doctor": true, "config": true, "platform": true, "recipe": true,
+		"report": true,
 	}
 	re := regexp.MustCompile("`sloppy ([a-z]+)")
 	for _, m := range re.FindAllStringSubmatch(string(b), -1) {
