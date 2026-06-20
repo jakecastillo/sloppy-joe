@@ -38,8 +38,12 @@ can adopt the tool cold, then widen by giving the roles who already care about t
 
 The demand drivers we are riding are owned by the **bottom four rows**, not the
 top one: FinOps practitioners now near-universally manage AI spend, and the
-audit/provenance need is regulation-backed (EU AI Act Art. 12 lifetime event
-logging, in force Aug 2026; SOC 2 / ISO 42001 change-log requirements). The
+audit/provenance need is regulation-backed — **SOC 2 (2026) and ISO/IEC 42001
+A.6.2.8** demand reversible, append-only, programmatically-exportable change logs
+*today*. (The EU AI Act Art. 12 logging obligation is a 2027 future-proofing
+tailwind, not a 2026 forcing function: the Digital Omnibus deferred the Annex III
+high-risk duties to ~Dec 2027 — see [`market.md`](market.md) for the sourced
+correction and the full demand evidence.) The
 platform engineer *installs* Sloppy Joe; the FinOps lead and the compliance owner
 are who make it *budgeted and renewed*. Right now they cannot see it.
 
