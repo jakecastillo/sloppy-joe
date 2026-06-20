@@ -209,7 +209,7 @@ curl -XPOST 127.0.0.1:8723/v1/signals -d @examples/signals/cost-spike.json
 curl 127.0.0.1:8723/status
 ```
 
-**Commands:** `sloppy inject` · `sloppy rules validate` · `sloppy test --replay` · `sloppy audit tail` · `sloppy audit --verify-sigs` · `sloppy doctor` · `sloppyd` (daemon).
+**Commands:** `sloppy inject` · `sloppy rules validate` · `sloppy test --replay` · `sloppy audit tail` · `sloppy audit --verify-sigs` · `sloppy report` · `sloppy doctor` · `sloppyd` (daemon).
 - **Verifiable signatures:** intents are ed25519-signed; the applied-audit entry persists the signed canonical bytes + full signature. `sloppy audit --verify-sigs` recomputes each intent's canonical bytes and verifies the signature against the persisted public key (`sloppy.key.pub`), exiting non-zero on any failure. The private key (`sloppy.key`, mode `0600`) is required to forge a verifiable intent; a holder of only the public key can verify authenticity and detect tampering but cannot sign. See [`SECURITY.md`](SECURITY.md) for the threat model.
 - **State backend:** `sloppyd --store sqlite` (default) or `--store redis --redis-addr host:6379`.
 - **Bind address:** `sloppyd` binds `127.0.0.1:8723` (loopback) by default, so it starts with no extra flags. To expose it on all interfaces, run `sloppyd --addr :8723 --auth` — the bind guard refuses an unauthenticated network-reachable bind, so `--auth` (with `SLOPPY_API_KEYS`) is required.
@@ -217,6 +217,7 @@ curl 127.0.0.1:8723/status
 - **Gateway:** to wire a real LiteLLM admin API, set `SLOPPY_LITELLM_URL` and `SLOPPY_TOKEN_LITELLM`. Copy-paste wiring for every gateway/sink/source (LiteLLM · GitHub · Slack · OTLP) → [`docs/integrations.md`](docs/integrations.md).
 - **`for:` windows:** one-shot `sloppy inject --now` fires immediately; the `sloppyd` daemon evaluates `for:` windows across the live signal stream.
 - **Gate rules in CI (no infra):** `sloppy rules validate ./rules` compiles every CEL `when`, checks action kinds + `intent_budget`, and exits non-zero on error — drop it in a PR check.
+- **FinOps & audit read surface:** `sloppy report` prints a read-only operator summary — audit-chain entry count + verification status + per-kind breakdown, plus spend-since for a tenant — in `--format table|json|csv`. `sloppy audit tail --json` and `sloppy test --replay --json` emit the same data machine-readably. One hash-chained log doubles as a FinOps spend lens and SOC 2 / ISO 42001 change-log evidence export — read-only, no new write path. See [`docs/market.md`](docs/market.md) for why this is the highest-leverage adoption surface.
 
 ## Documentation
 
@@ -225,6 +226,7 @@ New here? The fastest path to productive:
 1. **Run it** — the [Quickstart](#quickstart) above, then poke at [`examples/`](examples/) (CEL rules + a sample signal + a replay fixture).
 2. **Understand why it exists** — [`docs/vision.md`](docs/vision.md): the problem, the pivot, and the wedge.
 3. **See who it's for** — [`docs/audience.md`](docs/audience.md): who *operates* it vs. who *benefits*.
+4. **See how it fits the market** — [`docs/market.md`](docs/market.md): does the "automate + govern" wedge hold in mid-2026, who's competing, and the highest-leverage moves.
 
 📖 **Full documentation map → [`docs/`](docs/README.md)** — every doc, grouped by intent (*understand · plan · validate · contribute*). One index, no duplicated copy: descriptions live there, this README just points in.
 
