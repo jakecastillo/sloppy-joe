@@ -26,6 +26,7 @@ it's built).
 |---|---|
 | [`vision.md`](vision.md) | **Canonical "why."** The refined problem, the pivot away from building a gateway, the single load-bearing invariant, and the beachhead user. Read this first. |
 | [`audience.md`](audience.md) | Who *operates* the loop vs. who *benefits* from it, and the demand-gated plan to widen beyond the lone platform engineer. |
+| [`market.md`](market.md) | **Canonical market thesis under test.** Mid-2026, web-grounded evidence on whether the "automate + govern" wedge still holds, the competitive map, the demand drivers (FinOps-for-AI + SOC 2 / ISO 42001), and the three highest-leverage adoption moves. Honest about where our own story is weak — including a sourced correction to the EU AI Act timing. |
 | [`superpowers/specs/2026-06-08-sloppy-joe-v0-design.md`](superpowers/specs/2026-06-08-sloppy-joe-v0-design.md) | **Canonical engineering design** — scope, schemas (Signal / Rule / Intent), success criteria, non-goals. |
 
 ## Roadmap & plans — where it's going
